@@ -2,11 +2,14 @@ from options.test_options import TestOptions
 from data import DataLoader
 from models import create_model
 from utils.writer import Writer
+from utils.utils import intialize_dataset
 
 
 def run_test(epoch=-1, name=""):
     print('Running Test')
     opt = TestOptions().parse()
+    intialize_dataset(opt.dataset)
+
     opt.serial_batches = True  # no shuffle
     opt.name = name
     dataset = DataLoader(opt)

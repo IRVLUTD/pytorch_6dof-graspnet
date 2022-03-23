@@ -344,7 +344,10 @@ def base_network(pointnet_radius, pointnet_nclusters, scale, in_features):
 
     sa_modules = nn.ModuleList([sa1_module, sa2_module, sa3_module])
     fc_layer = nn.Sequential(nn.Linear(512 * scale, 1024 * scale),
-                             nn.BatchNorm1d(1024 * scale), nn.ReLU(True),
+                             nn.BatchNorm1d(1024 * scale), 
+                             nn.ReLU(True),
+                            #  nn.Dropout(0.2), #moday1 and monday 2
                              nn.Linear(1024 * scale, 1024 * scale),
-                             nn.BatchNorm1d(1024 * scale), nn.ReLU(True))
+                             nn.BatchNorm1d(1024 * scale), 
+                             nn.ReLU(True))
     return nn.ModuleList([sa_modules, fc_layer])

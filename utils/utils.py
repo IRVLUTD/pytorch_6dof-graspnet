@@ -14,6 +14,14 @@ GRIPPER_PC = np.load('gripper_models/panda_pc.npy',
                      allow_pickle=True).item()['points']
 GRIPPER_PC[:, 3] = 1.
 
+dataset_type = 0  # based on the dataset, Need to choose different gripper type
+
+
+def intialize_dataset(dataset):
+    global dataset_type
+    dataset_type = dataset
+
+
 
 def farthest_points(data,
                     nclusters,
@@ -284,10 +292,19 @@ def get_control_point_tensor(batch_size, use_torch=True, device="cpu"):
       Outputs a tensor of shape (batch_size x 6 x 3).
       use_tf: switches between outputing a tensor and outputing a numpy array.
     """
-    control_points = np.load('./gripper_control_points/panda.npy')[:, :3]
-    control_points = [[0, 0, 0], [0, 0, 0], control_points[0, :],
-                      control_points[1, :], control_points[-2, :],
-                      control_points[-1, :]]
+
+    global dataset_type
+
+    if dataset_type == 0:
+        control_points = np.load('./gripper_control_points/panda.npy')[:, :3]
+        control_points = [[0, 0, 0], [0, 0, 0], control_points[0, :],
+                        control_points[1, :], control_points[-2, :],
+                        control_points[-1, :]]
+        
+    elif dataset_type ==1:
+        control_points = get_gripper_control_points()
+        control_points = control_points[:, :3]
+
     control_points = np.asarray(control_points, dtype=np.float32)
     control_points = np.tile(np.expand_dims(control_points, 0),
                              [batch_size, 1, 1])
@@ -296,6 +313,16 @@ def get_control_point_tensor(batch_size, use_torch=True, device="cpu"):
         return torch.tensor(control_points).to(device)
 
     return control_points
+
+def get_gripper_control_points():
+    return np.array([
+        [-0.10, 0, 0, 1],
+        [-0.03, 0, 0, 1],
+        [-0.03, 0.07, 0, 1],
+        [0.03, 0.07, 0, 1],
+        [-0.03, 0.07, 0, 1],
+        [-0.03, -0.07, 0, 1],
+        [0.03, -0.07, 0, 1]])
 
 
 def transform_control_points(gt_grasps, batch_size, mode='qt', device="cpu"):

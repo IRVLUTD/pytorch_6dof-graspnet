@@ -6,6 +6,17 @@ import shutil
 import yaml
 
 
+def get_timestamp():
+    import datetime
+    now = datetime.datetime.now()
+    year = '{:02d}'.format(now.year)
+    month = '{:02d}'.format(now.month)
+    day = '{:02d}'.format(now.day)
+    hour = '{:02d}'.format(now.hour)
+    minute = '{:02d}'.format(now.minute)
+    day_month_year = '{}-{}-{}-{}-{}'.format(year, month, day, hour, minute)
+    return day_month_year
+
 class BaseOptions:
     def __init__(self):
         self.parser = argparse.ArgumentParser(
@@ -14,6 +25,12 @@ class BaseOptions:
 
     def initialize(self):
         # data params
+        self.parser.add_argument(
+            '--dataset',
+            type=int,
+            default=0,
+            help='specify the dataset used 0) GraspNet dataset 1) TaskGrasp Dataset'
+        )
         self.parser.add_argument(
             '--dataset_root_folder',
             type=str,
@@ -65,7 +82,7 @@ class BaseOptions:
             help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
         self.parser.add_argument('--checkpoints_dir',
                                  type=str,
-                                 default='./checkpoints',
+                                 default='./checkpoints/temp',
                                  help='models are saved here')
         self.parser.add_argument(
             '--serial_batches',
@@ -181,6 +198,19 @@ class BaseOptions:
             'setting the confidence weight to 1. immediately pushes the confidence to 1.0.'
         )
 
+
+                
+        ############################################
+        #       Taskgrasp config
+        ############################################
+        self.parser.add_argument(
+            '--pc_scaling',
+            action='store_false',
+            help="True if you want to scale the point cloud by the standard deviation"
+        )
+
+        
+
     def parse(self):
         if not self.initialized:
             self.initialize()
@@ -191,7 +221,7 @@ class BaseOptions:
         else:
             self.opt.dataset_split = "test"
         self.opt.batch_size = self.opt.num_objects_per_batch * \
-            self.opt.num_grasps_per_object
+        self.opt.num_grasps_per_object
         str_ids = self.opt.gpu_ids.split(',')
         self.opt.gpu_ids = []
         for str_id in str_ids:
@@ -226,7 +256,11 @@ class BaseOptions:
                     self.opt.pointnet_radius).split(".")[-1]
             if self.opt.arch == "vae" or self.opt.arch == "gan":
                 name += "_latent_size_" + str(self.opt.latent_size)
+            
+            if self.opt.dataset == 0 or self.opt.dataset == 1:
+                name += "_dataset_type_" + str(self.opt.dataset)
 
+            # self.opt.name = name + "_" + get_timestamp()
             self.opt.name = name
             expr_dir = os.path.join(self.opt.checkpoints_dir, self.opt.name)
             if os.path.isdir(expr_dir) and not self.opt.continue_train:

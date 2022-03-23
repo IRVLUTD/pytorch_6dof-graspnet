@@ -78,4 +78,33 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--verbose_plot',
                                  action='store_true',
                                  help='plots network weights, etc.')
+        
+        ############################################
+        #       Taskgrasp config
+        ############################################
+
+        self.parser.add_argument(
+            '--split_mode',
+            type=str,
+            default='o',
+            help="split_mode: Choose between held-out instance ('i'), tasks ('t') and classes ('o')")
+        self.parser.add_argument(
+            '--split_version',
+            type=int,
+            default=1,
+            help="0 is for random splits, 1 is for cross-validation splits")
+        self.parser.add_argument(
+            '--split_idx',
+            type=int,
+            default=1,
+            help="For each split mode, there are 4 cross validation splits (choose between 0-3)"
+        )
+
+        self.parser.add_argument(
+            '--vis_train',
+            type=str,
+            default='no',
+            help='visuialize pc and grasp: no, batch, seperatly'
+        )
+        
         self.is_train = True

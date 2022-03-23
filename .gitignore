@@ -1,0 +1,5 @@
+/data/taskgrasp_data
+/data/unified_grasp_data
+/checkpoints
+.vscode
+__pycache__

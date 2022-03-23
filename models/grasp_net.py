@@ -2,6 +2,7 @@ import torch
 from . import networks
 from os.path import join
 import utils.utils as utils
+from utils.visualization_utils import visualize_test
 
 
 class GraspNetModel:
@@ -23,6 +24,7 @@ class GraspNetModel:
         self.optimizer = None
         self.loss = None
         self.pcs = None
+        self.pc_color = None
         self.grasps = None
         # load/define networks
         self.net = networks.define_classifier(opt, self.gpu_ids, opt.arch,
@@ -59,6 +61,14 @@ class GraspNetModel:
         self.grasps = input_grasps.to(self.device).requires_grad_(
             self.is_train)
         self.targets = targets.to(self.device)
+        self.pc_color = torch.from_numpy(data["pc_color"]).contiguous()
+
+    # def taskgrasp_set_input(self, data):
+    #     self.pcs = data[0].to(self.device).requires_grad_(self.is_train)
+    #     self.grasps = data[5].to(self.device).requires_grad_(
+    #         self.is_train)
+    #     self.targets = data[6].to(self.device)
+
 
     def generate_grasps(self, pcs, z=None):
         with torch.no_grad():
@@ -177,6 +187,11 @@ class GraspNetModel:
             elif self.opt.arch == "gan":
                 predicted_cp = utils.transform_control_points(
                     prediction, prediction.shape[0], device=self.device)
+
+                # For testing 
+                if self.opt.vis_test:
+                    visualize_test(self.pcs[1], self.pc_color[1], predicted_cp)
+
                 reconstruction_loss, _ = self.criterion(
                     predicted_cp,
                     self.targets,

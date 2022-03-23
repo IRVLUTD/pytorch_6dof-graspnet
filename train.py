@@ -3,8 +3,10 @@ from options.train_options import TrainOptions
 from data import DataLoader
 from models import create_model
 from utils.writer import Writer
+from utils.utils import intialize_dataset
 from test import run_test
 import threading
+from utils.visualization_utils import visualize_batch, visualize_batch_serperatly
 
 
 def main():
@@ -12,6 +14,7 @@ def main():
     if opt == None:
         return
 
+    intialize_dataset(opt.dataset)
     dataset = DataLoader(opt)
     dataset_size = len(dataset) * opt.num_grasps_per_object
     model = create_model(opt)
@@ -28,6 +31,13 @@ def main():
             total_steps += opt.batch_size
             epoch_iter += opt.batch_size
             model.set_input(data)
+            if opt.vis_train != 'no':
+                if opt.vis_train == 'batch':
+                    visualize_batch(data)
+                else:
+                    visualize_batch_serperatly(data)
+
+                
             model.optimize_parameters()
             if total_steps % opt.print_freq == 0:
                 loss_types = []
@@ -85,6 +95,7 @@ def main():
         if epoch % opt.run_test_freq == 0:
             acc = run_test(epoch, name=opt.name)
             writer.plot_acc(acc, epoch)
+            
 
     writer.close()
 

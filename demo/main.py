@@ -28,7 +28,8 @@ def make_parser():
                         default='sampling')
     parser.add_argument('--refine_steps', type=int, default=25)
 
-    parser.add_argument('--npy_folder', type=str, default='demo/data/')
+    parser.add_argument('--npy_folder', type=str, default='demo/data/graspnet')
+    parser.add_argument('--dataset', type=int, default=0)
     parser.add_argument(
         '--threshold',
         type=float,
@@ -125,6 +126,8 @@ def backproject(depth_cv,
 def main(args):
     parser = make_parser()
     args = parser.parse_args()
+    # Set data set to select proper gripper
+    # utils.intialize_dataset(args.dataset)
     grasp_sampler_args = utils.read_checkpoint_args(args.grasp_sampler_folder)
     grasp_sampler_args.is_train = False
     grasp_evaluator_args = utils.read_checkpoint_args(
@@ -146,7 +149,7 @@ def main(args):
                        grasp_scores=generated_scores)
             print('close the window to continue to next object . . .')
             mlab.show()
-    else:
+    elif args.dataset == 0:
         for npy_file in glob.glob(os.path.join(args.npy_folder, '*.npy')):
             # Depending on your numpy version you may need to change allow_pickle
             # from True to False.
@@ -183,6 +186,40 @@ def main(args):
                 pc_color=pc_colors,
                 grasps=generated_grasps,
                 grasp_scores=generated_scores,
+            )
+            print('close the window to continue to next object . . .')
+            mlab.show()
+    else:
+         for npy_file in glob.glob(os.path.join(args.npy_folder, '*.npy')):
+            # Depending on your numpy version you may need to change allow_pickle
+            # from True to False.
+            print(npy_file)
+            pc = np.load(npy_file,allow_pickle=True)
+
+
+            pc_mean = pc[:, :3].mean(axis=0)
+            pc[:, :3] -= pc_mean
+            
+            if pc.shape[1] == 6:
+                color = pc[:, 3:] / 255.0
+
+            n_points = pc.shape[0]
+            color = None
+
+            if pc.shape[1] == 6:
+                color = np.zeros((n_points, 4))
+                color[:, :3] = pc[:, 3:]
+                color[:, 3] = np.ones(n_points)
+
+            generated_grasps, generated_scores = estimator.generate_and_refine_grasps(
+                pc[:, :3])
+            mlab.figure(bgcolor=(1, 1, 1))
+            draw_scene(
+                pc,
+                pc_color=color[:,:3],
+                grasps=generated_grasps,
+                grasp_scores=generated_scores,
+                dataset=1
             )
             print('close the window to continue to next object . . .')
             mlab.show()
