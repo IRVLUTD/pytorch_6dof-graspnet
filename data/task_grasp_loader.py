@@ -18,7 +18,8 @@ def pc_normalize(pc, grasp, pc_scaling=True):
     centroid = np.mean(pc, axis=0)
     pc = pc - centroid
     grasp[:3, 3] -= centroid
-
+    scale_transform = None
+    
     if pc_scaling:
         m = np.max(np.sqrt(np.sum(pc ** 2, axis=1)))
 
@@ -27,7 +28,7 @@ def pc_normalize(pc, grasp, pc_scaling=True):
         pc = np.matmul(scale_transform, pc.T).T
         pc = pc[:, :3]
         grasp = np.matmul(scale_transform, grasp)
-    return pc, grasp
+    return pc, grasp, scale_transform
 
 def collate_fn(batch):
     """ This function overrides defaul batch collate function and aggregates 
@@ -221,22 +222,24 @@ class TaskGraspLoader(data.Dataset):
             pc, self.opt.npoints)
         pc_color = pc[:, 3:]
         pc = pc[:,:3]
-        pc_mean = np.mean(pc, 0, keepdims=True)
-        pc[:, :3] -= pc_mean[:, :3] 
-
         
-
+        
         output_grasps = []
+
         for grasp_file in grasp_set:
             grasp = self._grasps[grasp_file]
-
             output_grasps.append(grasp)
-            
+        
+        centroid = np.mean(pc, axis=0)
+        pc = pc - centroid
+        grasp[:3, 3] -= centroid
+
         gt_control_points = utils.transform_control_points_numpy(
             np.array(output_grasps), self.opt.num_grasps_per_object, mode='rt')[:,:, :3]
         
         pcs = []
         final_grasp_pcs = []
+        scale_transform = []
         for i in range(self.opt.num_grasps_per_object):
             
             pc_tmp = copy.deepcopy(pc)
@@ -247,6 +250,8 @@ class TaskGraspLoader(data.Dataset):
             latent = np.expand_dims(latent, axis=1)
             pc_tmp = np.concatenate([pc_tmp, grasp_pc], axis=0)
 
+            #Normalize pc and grasp
+            pc_tmp, grasp, sc_factor = pc_normalize(pc_tmp, grasp, pc_scaling=self._pc_scaling)
             pc_tmp = np.concatenate([pc_tmp, latent], axis=1) # adding latent space
 
             if self._transforms is not None:
@@ -258,6 +263,8 @@ class TaskGraspLoader(data.Dataset):
             grasp_pc = grasp_pc[:,:-1]
             pcs.append(pc_tmp.numpy())
             final_grasp_pcs.append(grasp_pc.numpy())
+            scale_transform.append(sc_factor)
+            output_grasps[i] = grasp
 
         
         meta['pc'] = np.array(pcs).astype('float32')
@@ -266,6 +273,7 @@ class TaskGraspLoader(data.Dataset):
             len(output_grasps), -1)
         meta['target_cps'] = np.array(final_grasp_pcs)
         meta['obj'] = np.array([obj])
+        meta['scale_transform'] = np.array(scale_transform)
 
         return meta
         # grasp_pc = get_gripper_control_points()

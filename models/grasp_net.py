@@ -3,6 +3,7 @@ from . import networks
 from os.path import join
 import utils.utils as utils
 from utils.visualization_utils import visualize_test
+import numpy as np
 
 
 class GraspNetModel:
@@ -26,6 +27,7 @@ class GraspNetModel:
         self.pcs = None
         self.pc_color = None
         self.grasps = None
+        self.task_id =None
         # load/define networks
         self.net = networks.define_classifier(opt, self.gpu_ids, opt.arch,
                                               opt.init_type, opt.init_gain,
@@ -52,16 +54,24 @@ class GraspNetModel:
 
     def set_input(self, data):
         input_pcs = torch.from_numpy(data['pc']).contiguous()
-        input_grasps = torch.from_numpy(data['grasp_rt']).float()
+        scale_transform = 0
         if self.opt.arch == "evaluator":
             targets = torch.from_numpy(data['labels']).float()
+            input_grasps = torch.from_numpy(data['target']).float()
+            if "task_id" in data:
+                self.task_id = torch.from_numpy(data['task_id']).float()
         else:
-            targets = torch.from_numpy(data['target_cps']).float()
+            targets = torch.from_numpy(data['target_cps']).float()            
+            input_grasps = torch.from_numpy(data['grasp_rt']).float()
+            self.scale_transform = torch.from_numpy(data['scale_transform']).float().to(self.device)
+
+        # for color pc
+        # self.pc_color = torch.from_numpy(data["pc_color"]).contiguous()
         self.pcs = input_pcs.to(self.device).requires_grad_(self.is_train)
         self.grasps = input_grasps.to(self.device).requires_grad_(
             self.is_train)
         self.targets = targets.to(self.device)
-        self.pc_color = torch.from_numpy(data["pc_color"]).contiguous()
+        
 
     # def taskgrasp_set_input(self, data):
     #     self.pcs = data[0].to(self.device).requires_grad_(self.is_train)
@@ -79,6 +89,8 @@ class GraspNetModel:
         return torch.sigmoid(success)
 
     def forward(self):
+        if(self.opt.dataset == 1 and self.opt.arch == "evaluator"):
+            return self.net(self.pcs, None, train=self.is_train, task = self.task_id)
         return self.net(self.pcs, self.grasps, train=self.is_train)
 
     def backward(self, out):
@@ -96,9 +108,21 @@ class GraspNetModel:
                 mu, logvar, device=self.device)
             self.loss = self.kl_loss + self.reconstruction_loss + self.confidence_loss
         elif self.opt.arch == 'gan':
-            predicted_cp, confidence = out
+            prediction, confidence = out
             predicted_cp = utils.transform_control_points(
-                predicted_cp, predicted_cp.shape[0], device=self.device)
+                prediction, prediction.shape[0], device=self.device)
+            
+            if self.opt.dataset == 1 and self.scale_transform[0] != None:
+                # scaling to match the input
+                shape = predicted_cp.shape
+                ones = torch.ones((shape[0], shape[1], 1), dtype=torch.float32).to(self.device)
+                predicted_cp = torch.cat((predicted_cp, ones), -1)
+
+                predicted_cp = torch.matmul(predicted_cp, self.scale_transform.permute(0, 2, 1))[:, :, :3]
+
+            # with torch.no_grad():
+            #     visualize_test(self.pcs[1], self.pc_color[1], predicted_cp)
+
             self.reconstruction_loss, self.confidence_loss = self.criterion(
                 predicted_cp,
                 self.targets,
@@ -188,6 +212,14 @@ class GraspNetModel:
                 predicted_cp = utils.transform_control_points(
                     prediction, prediction.shape[0], device=self.device)
 
+                if self.opt.dataset == 1 and self.scale_transform[0] != None:
+                    # scaling to match the input
+                    shape = predicted_cp.shape
+                    ones = torch.ones((shape[0], shape[1], 1), dtype=torch.float32).to(self.device)
+                    predicted_cp = torch.cat((predicted_cp, ones), -1)
+
+                    predicted_cp = torch.matmul(predicted_cp, self.scale_transform.permute(0, 2, 1))[:, :, :3]
+
                 # For testing 
                 if self.opt.vis_test:
                     visualize_test(self.pcs[1], self.pc_color[1], predicted_cp)
@@ -198,6 +230,7 @@ class GraspNetModel:
                     confidence=confidence,
                     confidence_weight=self.opt.confidence_weight,
                     device=self.device)
+                    
                 return reconstruction_loss, 1
             else:
 

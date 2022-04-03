@@ -79,7 +79,7 @@ def define_classifier(opt, gpu_ids, arch, init_type, init_gain, device):
                               opt.pointnet_nclusters, opt.latent_size, device)
     elif arch == 'evaluator':
         net = GraspEvaluator(opt.model_scale, opt.pointnet_radius,
-                             opt.pointnet_nclusters, device)
+                             opt.pointnet_nclusters, device, opt.dataset)
     else:
         raise NotImplementedError('model name [%s] is not recognized' % arch)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -272,19 +272,22 @@ class GraspEvaluator(nn.Module):
                  model_scale=1,
                  pointnet_radius=0.02,
                  pointnet_nclusters=128,
-                 device="cpu"):
+                 device="cpu",
+                 dataset=0):
         super(GraspEvaluator, self).__init__()
-        self.create_evaluator(pointnet_radius, model_scale, pointnet_nclusters)
         self.device = device
+        self.dataset = dataset
+        self.create_evaluator(pointnet_radius, model_scale, pointnet_nclusters)
+        
 
     def create_evaluator(self, pointnet_radius, model_scale,
                          pointnet_nclusters):
-        # The number of input features for the evaluator is 4: the x, y, z
+        # The number of input features for the evaluator is 57: the x, y, z
         # position of the concatenated gripper and object point-clouds and an
         # extra binary feature, which is 0 for the object and 1 for the gripper,
-        # to tell these point-clouds apart
+        # to tell these point-clouds apart and one hot encoding of 56 task
         self.evaluator = base_network(pointnet_radius, pointnet_nclusters,
-                                      model_scale, 4)
+                                      model_scale, 60 if self.dataset==1 else 4)
         self.predictions_logits = nn.Linear(1024 * model_scale, 1)
         self.confidence = nn.Linear(1024 * model_scale, 1)
 
@@ -293,10 +296,31 @@ class GraspEvaluator(nn.Module):
             xyz, xyz_features = module(xyz, xyz_features)
         return self.evaluator[1](xyz_features.squeeze(-1))
 
-    def forward(self, pc, gripper_pc, train=True):
-        pc, pc_features = self.merge_pc_and_gripper_pc(pc, gripper_pc)
-        x = self.evaluate(pc, pc_features.contiguous())
+    def forward(self, pc, gripper_pc, train=True, task = None):
+        if(gripper_pc == None and task != None):
+            pc, pc_features = self.merge_features(pc, task)
+        else:
+            pc, pc_features = self.merge_pc_and_gripper_pc(pc, gripper_pc)
+        x = self.evaluate(pc.contiguous(), pc_features.contiguous())
         return self.predictions_logits(x), torch.sigmoid(self.confidence(x))
+
+    def merge_features(self, pc, task):
+
+        pc_shape = pc.shape
+        task_shape = task.shape
+        assert (len(pc_shape) == 3)
+        assert (len(task_shape) == 2)
+        assert (pc_shape[0] == task_shape[0])
+
+        xyz = pc[:, :, :3]
+        
+        task = torch.unsqueeze(task,1)
+
+        task = task.repeat(1, pc_shape[1], 1)
+
+        xyz_feature = torch.cat((pc, task), -1).transpose(-1, 1)
+        
+        return xyz, xyz_feature
 
     def merge_pc_and_gripper_pc(self, pc, gripper_pc):
         """

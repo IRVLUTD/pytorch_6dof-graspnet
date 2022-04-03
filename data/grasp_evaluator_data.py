@@ -43,7 +43,7 @@ class GraspEvaluatorData(BaseDataset):
 
         meta = {}
         meta['pc'] = data[0][:, :, :3]
-        meta['grasp_rt'] = gt_control_points[:, :, :3]
+        meta['target'] = gt_control_points[:, :, :3]
         meta['labels'] = data[2]
         meta['quality'] = data[3]
         meta['pc_pose'] = data[4]

@@ -302,7 +302,7 @@ def get_control_point_tensor(batch_size, use_torch=True, device="cpu"):
                         control_points[-1, :]]
         
     elif dataset_type ==1:
-        control_points = get_gripper_control_points()
+        control_points = get_gripper_control_points_taskgrasp()
         control_points = control_points[:, :3]
 
     control_points = np.asarray(control_points, dtype=np.float32)
@@ -314,7 +314,7 @@ def get_control_point_tensor(batch_size, use_torch=True, device="cpu"):
 
     return control_points
 
-def get_gripper_control_points():
+def get_gripper_control_points_taskgrasp():
     return np.array([
         [-0.10, 0, 0, 1],
         [-0.03, 0, 0, 1],
@@ -359,6 +359,7 @@ def transform_control_points(gt_grasps, batch_size, mode='qt', device="cpu"):
         shape = control_points.shape
         ones = torch.ones((shape[0], shape[1], 1), dtype=torch.float32)
         control_points = torch.cat((control_points, ones), -1)
+
         return torch.matmul(control_points, gt_grasps.permute(0, 2, 1))
 
 

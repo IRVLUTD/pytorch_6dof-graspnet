@@ -28,7 +28,7 @@ def visualize_batch(data):
 
     pcs = data["pc"][0]
     pc_color = data["pc_color"][0]
-    grasps = data["grasp_rt"]
+    grasp_pc = data["target_cps"]
     obj = data["obj"]
 
     print("Object:", obj)
@@ -42,8 +42,7 @@ def visualize_batch(data):
     mlab.figure(bgcolor=(1, 1, 1))
     draw_scene(
         pcs,
-        grasps=grasps,
-        # target_cps = [grasp_pc[i].numpy()],
+        target_cps = grasp_pc,
         pc_color= pc_color,
         dataset=1
     )
@@ -59,7 +58,7 @@ def visualize_batch_serperatly(data):
     # grasps = data["grasp_rt"]
     obj = data["obj"]
 
-   
+    print("Object:", obj[0])
     # grasp_pc = data[6]
     
 
@@ -67,12 +66,11 @@ def visualize_batch_serperatly(data):
 
     for i in range(num):
 
-        print("Object:", obj)
         mlab.figure(bgcolor=(1, 1, 1))
         draw_scene(
             data["pc"][i],
-            # grasps=[data["grasp_rt"][i]],
-            target_cps = [data["target_cps"][i]],
+            grasps=[data["grasp_rt"][i]],
+            target_cps =  [data["target_cps"][i]] if "target_cps" in data.keys() else None,
             pc_color= data["pc_color"][i],
             dataset=1
         )
@@ -85,7 +83,7 @@ def visualize_test(pc, pc_color, pred_grasp_cps):
     draw_scene(
             pc = pc.cpu(),
             pc_color = pc_color.cpu(),
-            target_cps = pred_grasp_cps.cpu().numpy(),
+            target_cps = pred_grasp_cps.detach().cpu().numpy(),
             dataset=1
         )
     print('close the window to continue to next object . . .')
@@ -280,6 +278,21 @@ def draw_scene(pc,
                 color=gripper_color,
                 opacity=1 if visualize_diverse_grasps else 0.5)
         else:
+            if target_cps is not None:
+                target_cps = np.array(target_cps)
+                mlab.points3d(target_cps[ii, :, 0],
+                                target_cps[ii, :, 1],
+                                target_cps[ii, :, 2],
+                                color=(1.0, 0.0, 0),
+                                scale_factor=0.01)
+                tube_radius = 0.001
+                mlab.plot3d(target_cps[ii, :, 0],
+                            target_cps[ii, :, 1],
+                            target_cps[ii, :, 2],
+                            color=gripper_color,
+                            tube_radius=tube_radius,
+                            opacity=1)
+            # else:
             pts = np.matmul(grasp_pc, g[:3, :3].T)
             pts += np.expand_dims(g[:3, 3], 0)
             if isinstance(gripper_color, list):
@@ -297,20 +310,7 @@ def draw_scene(pc,
                             color=gripper_color,
                             tube_radius=tube_radius,
                             opacity=1)
-            if target_cps is not None:
-                target_cps = np.array(target_cps)
-                mlab.points3d(target_cps[ii, :, 0],
-                                target_cps[ii, :, 1],
-                                target_cps[ii, :, 2],
-                                color=(1.0, 0.0, 0),
-                                scale_factor=0.01)
-                tube_radius = 0.001
-                mlab.plot3d(target_cps[ii, :, 0],
-                            target_cps[ii, :, 1],
-                            target_cps[ii, :, 2],
-                            color=gripper_color,
-                            tube_radius=tube_radius,
-                            opacity=1)
+            
     if grasps.size == 0 and target_cps is not None:  
         target_cps = np.array(target_cps)
 
