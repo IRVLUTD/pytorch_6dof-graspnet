@@ -142,6 +142,8 @@ class TaskGraspLoader(data.Dataset):
                     raise ValueError(
                         'Unable to find processed point cloud file {}'.format(pc_file))
                 pc = np.load(pc_file)
+                pc_mean = pc[:, :3].mean(axis=0)
+                pc[:, :3] -= pc_mean
                 self._pc[pc_file] = pc
             
             grasp_set = []
@@ -149,6 +151,9 @@ class TaskGraspLoader(data.Dataset):
             for grasp_id in range(opt.num_grasps_per_object):
                 grasp_file = os.path.join(
                 data_dir, obj, "grasps", str(grasp_id), "grasp.npy")
+                if not os.path.exists(grasp_file):
+                    raise ValueError(
+                        'Unable to find grasp point cloud file {}'.format(grasp_file))
                 if grasp_file not in self._grasps:
                     grasp = np.load(grasp_file)
                     grasp_set.append(grasp_file)
@@ -230,9 +235,9 @@ class TaskGraspLoader(data.Dataset):
             grasp = self._grasps[grasp_file]
             output_grasps.append(grasp)
         
-        centroid = np.mean(pc, axis=0)
-        pc = pc - centroid
-        grasp[:3, 3] -= centroid
+        # centroid = np.mean(pc, axis=0)
+        # pc = pc - centroid
+        # grasp[:3, 3] -= centroid
 
         gt_control_points = utils.transform_control_points_numpy(
             np.array(output_grasps), self.opt.num_grasps_per_object, mode='rt')[:,:, :3]

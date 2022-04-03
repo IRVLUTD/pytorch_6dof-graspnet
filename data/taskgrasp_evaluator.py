@@ -13,6 +13,7 @@ except:
 
 from utils.splits import get_split_data, parse_line, get_ot_pairs_taskgrasp, get_task1_hits
 from utils import utils
+import copy
 
 
 class TaskGraspEvaluatorData(BaseDataset):
@@ -74,21 +75,36 @@ class TaskGraspEvaluatorData(BaseDataset):
         self._data = []
         self._pc = {}
         self._grasps = {}
+        self._object_task_grasp_dataset = {}
 
         start = time.time()
         correct_counter = 0
 
         all_object_instances = []
+        all_tasks = []
 
-        self._object_task_pairs_dataset = []
-        self._data_labels = []
-        self._data_label_counter = {0: 0, 1: 0}
+        
+        
 
         for i in tqdm.trange(len(lines)):
             obj, obj_class, grasp_id, task, label = parse_line(lines[i])
             obj_class = self._map_obj2class[obj]
+
             all_object_instances.append(obj)
-            self._object_task_pairs_dataset.append("{}-{}".format(obj, task))
+            all_tasks.append(task)
+
+            self._object_task_grasp_dataset["{}-{}-{}".format(obj, task, grasp_id)] = label
+
+        self._all_object_instances = list(set(all_object_instances))
+
+        self._all_tasks = list(set(all_tasks))
+
+        # Get valid object task pair
+        # task1_results_file = os.path.join(opt.dataset_root_folder, 'task1_results.txt')
+        # assert os.path.exists(task1_results_file)
+        # object_task_pairs = get_object_task_pairs(task1_results_file)
+
+        for obj in tqdm.tqdm(self._all_object_instances):
 
             pc_file = os.path.join(data_dir, obj, "fused_pc_clean.npy")
             if pc_file not in self._pc:
@@ -100,27 +116,28 @@ class TaskGraspEvaluatorData(BaseDataset):
                 pc[:, :3] -= pc_mean
                 self._pc[pc_file] = pc
 
-            grasp_file = os.path.join(
-                data_dir, obj, "grasps", str(grasp_id), "grasp.npy")
-            if grasp_file not in self._grasps:
-                grasp = np.load(grasp_file)
-                self._grasps[grasp_file] = grasp
+            grasp_set = []
 
-            self._data.append(
-                (grasp_file, pc_file, obj, obj_class, grasp_id, task, label))
-            self._data_labels.append(int(label))
-            if label:
-                correct_counter += 1
-                self._data_label_counter[1] += 1
-            else:
-                self._data_label_counter[0] += 1
+            for grasp_id in range(opt.num_grasps_per_object):
+                grasp_file = os.path.join(
+                    data_dir, obj, "grasps", str(grasp_id), "grasp.npy")
+                if not os.path.exists(grasp_file):
+                    raise ValueError(
+                        'Unable to find grasp point cloud file {}'.format(grasp_file))
+                if grasp_file not in self._grasps:
+                    grasp = np.load(grasp_file)
+                    grasp_set.append(grasp_file)
+                    self._grasps[grasp_file] = grasp
+            
+            for task in self._all_tasks:
+                self._data.append((pc_file, grasp_set, obj, task))
 
-        self._all_object_instances = list(set(all_object_instances))
+
         self._len = len(self._data)
-        print('Loading files from {} took {}s; overall dataset size {}, proportion successful grasps {:.2f}'.format(
-            data_txt_splits[self._train], time.time() - start, self._len, float(correct_counter / self._len)))
 
-        self._data_labels = np.array(self._data_labels)
+        print('Loading files from {} took {}s; overall dataset size {}'.format(
+            data_txt_splits[self._train], time.time() - start, self._len))
+
 
         # with open('instance.txt', 'w') as f:
         #     for item in self._all_object_instances:
@@ -133,47 +150,84 @@ class TaskGraspEvaluatorData(BaseDataset):
 
     def __getitem__(self, index):
 
-        grasp_file, pc_file, obj, obj_class, grasp_id, task, label = self._data[index]
+        pc_file, grasp_set, obj, task = self._data[index]
+
         pc = self._pc[pc_file]
         pc = utils.regularize_pc_point_count(
             pc, self.opt.npoints)
         pc_color = pc[:, 3:]
         pc = pc[:,:3]
-        pc_mean = np.mean(pc, 0, keepdims=True)
-        pc -= pc_mean
 
-        grasp = self._grasps[grasp_file]
-        task_id = self._tasks.index(task)
-        instance_id = self._all_object_instances.index(obj)
+        data_label_counter = {0: 0, 1: 0}
 
-        grasp_pc = utils.get_gripper_control_points_taskgrasp()
-        grasp_pc = np.matmul(grasp, grasp_pc.T).T
-        grasp_pc = grasp_pc[:, :3]
 
-        latent = np.concatenate(
-            [np.zeros(pc.shape[0]), np.ones(grasp_pc.shape[0])])
-        latent = np.expand_dims(latent, axis=1)
-        pc = np.concatenate([pc, grasp_pc], axis=0)
+        output_pcs = []
+        output_grasps = []
+        output_grasps_cp = []
+        output_labels = []
+        output_obj = []
+        task_ids = []
 
-        pc = np.concatenate([pc, latent], axis=1)
+        for grasp_file in grasp_set:
+            grasp = self._grasps[grasp_file]
+            output_grasps.append(grasp)
+    
 
-        if self._transforms is not None:
-            pc = self._transforms(pc)
-
-        # pc, grasp_pc = torch.split(pc,[pc.shape[0]-grasp_pc.shape[0], grasp_pc.shape[0]])
-
-        pc = pc.cpu().detach().numpy()
-        # grasp_pc = grasp_pc.cpu().detach().numpy()
+        gt_control_points = utils.transform_control_points_numpy(
+            np.array(output_grasps), self.opt.num_grasps_per_object, mode='rt')[:,:, :3]
         
+        correct_counter = 0
+        count = 0
+
+        for grasp_id in range(self.opt.num_grasps_per_object):
+            
+            key = "{}-{}-{}".format(obj, task, grasp_id)
+            if key in self._object_task_grasp_dataset:
+
+                pc_tmp = copy.deepcopy(pc)
+                grasp_pc = gt_control_points[grasp_id]
+                task_id = self._tasks.index(task)
+
+                label = self._object_task_grasp_dataset[key]
+
+                latent = np.concatenate(
+                    [np.zeros(pc_tmp.shape[0]), np.ones(grasp_pc.shape[0])])
+                latent = np.expand_dims(latent, axis=1)
+                pc_tmp = np.concatenate([pc_tmp, grasp_pc], axis=0)
+
+                pc_tmp = np.concatenate([pc_tmp, latent], axis=1)
+
+                if self._transforms is not None:
+                    pc_tmp = self._transforms(pc_tmp)
+
+                # pc, grasp_pc = torch.split(pc,[pc.shape[0]-grasp_pc.shape[0], grasp_pc.shape[0]])
+
+                pc_final = pc_tmp.cpu().detach().numpy()
+                # grasp_pc = grasp_pc.cpu().detach().numpy()
+                output_pcs.append(pc_final)
+                output_obj.append(obj)
+                output_grasps_cp.append(pc_final[pc_final.shape[0]-grasp_pc.shape[0]:, :3])
+                output_labels.append(label)
+                task_ids.append(task_id)
+                
+                count+=1
+                if label:
+                    correct_counter += 1
+                    data_label_counter[1] += 1
+                else:
+                    data_label_counter[0] += 1
+
+        with open('ratio.txt', 'a') as f:
+            # if correct_counter != 0:
+            f.write("%s:\t%s\t%s\n" % (obj, task, float(correct_counter / count)))
+            
         meta = {}
-        meta['pc'] = np.array([pc])
-        meta['pc_color'] = np.array([pc_color])
-        meta['grasp_rt'] = np.array([grasp])
-        meta['target'] = np.array([pc[pc.shape[0]-grasp_pc.shape[0]:, :3]])
-        meta['labels'] = np.array([label])
-        meta['obj'] = np.array([obj])
-        meta['grasp_id'] = np.array([grasp_id])
-        meta['task_id'] = np.array(torch.nn.functional.one_hot(torch.LongTensor([task_id]), self._num_tasks))
+        meta['pc'] = np.array(output_pcs)
+        meta['grasp_rt'] = np.array(output_grasps)
+        meta['target'] = np.array(output_grasps_cp)
+        meta['labels'] = np.array(output_labels)
+        meta['obj'] = np.array(output_obj)
+        meta['task_id'] = np.array(torch.nn.functional.one_hot(torch.LongTensor(task_ids), self._num_tasks))
         return meta
 
     def __len__(self):
