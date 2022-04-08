@@ -245,38 +245,36 @@ class TaskGraspLoader(data.Dataset):
         pcs = []
         final_grasp_pcs = []
         scale_transform = []
-        for i in range(self.opt.num_grasps_per_object):
+        # for i in range(self.opt.num_grasps_per_object):
             
-            pc_tmp = copy.deepcopy(pc)
-            grasp_pc = gt_control_points[i]
-            # Introduce noise
-            latent = np.concatenate(
-            [np.zeros(pc_tmp.shape[0]), np.ones(grasp_pc.shape[0])])
-            latent = np.expand_dims(latent, axis=1)
-            pc_tmp = np.concatenate([pc_tmp, grasp_pc], axis=0)
+        # grasp_pc = gt_control_points[i]
+        # Introduce noise
+        total_cp_points = gt_control_points.shape[0] * gt_control_points.shape[1]
+        latent = np.concatenate(
+        [np.zeros(pc.shape[0]), np.ones(total_cp_points)])
+        latent = np.expand_dims(latent, axis=1)
+        pc = np.concatenate([pc, gt_control_points.reshape(total_cp_points, 3)], axis=0)
 
-            #Normalize pc and grasp
-            pc_tmp, grasp, sc_factor = pc_normalize(pc_tmp, grasp, pc_scaling=self._pc_scaling)
-            pc_tmp = np.concatenate([pc_tmp, latent], axis=1) # adding latent space
+        #Normalize pc and grasp
+        # pc, grasp, sc_factor = pc_normalize(pc, grasp, pc_scaling=self._pc_scaling)
+        pc = np.concatenate([pc, latent], axis=1) # adding latent space
 
-            if self._transforms is not None:
-                pc_tmp = self._transforms(pc_tmp)
+        if self._transforms is not None:
+            pc = self._transforms(pc)
 
 
-            pc_tmp, grasp_pc = torch.split(pc_tmp,[pc_tmp.shape[0]-grasp_pc.shape[0], grasp_pc.shape[0]])
-            pc_tmp = pc_tmp[:,:-1]
-            grasp_pc = grasp_pc[:,:-1]
-            pcs.append(pc_tmp.numpy())
-            final_grasp_pcs.append(grasp_pc.numpy())
-            scale_transform.append(sc_factor)
-            output_grasps[i] = grasp
+        pc, grasps_pc = torch.split(pc,[pc.shape[0]-total_cp_points, total_cp_points])
+        
+        grasps_pc = grasps_pc.numpy()[:, :3]
+        grasps_pc = grasps_pc.reshape(gt_control_points.shape[0], gt_control_points.shape[1], 3)
+        pc = pc.numpy()[:, :3]
 
         
-        meta['pc'] = np.array(pcs).astype('float32')
+        meta['pc'] = np.array([pc] * self.opt.num_grasps_per_object).astype('float32')
         meta['pc_color'] = np.array([pc_color] * self.opt.num_grasps_per_object)[:, :, :3].astype('float32')
         meta['grasp_rt'] = np.array(output_grasps).reshape(
             len(output_grasps), -1)
-        meta['target_cps'] = np.array(final_grasp_pcs)
+        meta['target_cps'] = np.array(grasps_pc)
         meta['obj'] = np.array([obj])
         meta['scale_transform'] = np.array(scale_transform)
 

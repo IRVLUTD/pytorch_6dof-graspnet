@@ -28,6 +28,7 @@ class GraspNetModel:
         self.pc_color = None
         self.grasps = None
         self.task_id =None
+        self.scale_transform = []
         # load/define networks
         self.net = networks.define_classifier(opt, self.gpu_ids, opt.arch,
                                               opt.init_type, opt.init_gain,
@@ -54,7 +55,7 @@ class GraspNetModel:
 
     def set_input(self, data):
         input_pcs = torch.from_numpy(data['pc']).contiguous()
-        scale_transform = 0
+
         if self.opt.arch == "evaluator":
             targets = torch.from_numpy(data['labels']).float()
             input_grasps = torch.from_numpy(data['target']).float()
@@ -63,7 +64,8 @@ class GraspNetModel:
         else:
             targets = torch.from_numpy(data['target_cps']).float()            
             input_grasps = torch.from_numpy(data['grasp_rt']).float()
-            self.scale_transform = torch.from_numpy(data['scale_transform']).float().to(self.device)
+            if "scale_transform" in data:
+                self.scale_transform = torch.from_numpy(data['scale_transform']).float().to(self.device)
 
         # for color pc
         # self.pc_color = torch.from_numpy(data["pc_color"]).contiguous()
@@ -112,7 +114,7 @@ class GraspNetModel:
             predicted_cp = utils.transform_control_points(
                 prediction, prediction.shape[0], device=self.device)
             
-            if self.opt.dataset == 1 and self.scale_transform[0] != None:
+            if self.opt.dataset == 1 and len(self.scale_transform) != 0 and self.scale_transform[0] != None:
                 # scaling to match the input
                 shape = predicted_cp.shape
                 ones = torch.ones((shape[0], shape[1], 1), dtype=torch.float32).to(self.device)
@@ -212,7 +214,7 @@ class GraspNetModel:
                 predicted_cp = utils.transform_control_points(
                     prediction, prediction.shape[0], device=self.device)
 
-                if self.opt.dataset == 1 and self.scale_transform[0] != None:
+                if self.opt.dataset == 1 and len(self.scale_transform) !=0 and self.scale_transform[0] != None:
                     # scaling to match the input
                     shape = predicted_cp.shape
                     ones = torch.ones((shape[0], shape[1], 1), dtype=torch.float32).to(self.device)
