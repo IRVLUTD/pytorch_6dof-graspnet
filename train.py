@@ -39,6 +39,7 @@ def main():
 
                 
             model.optimize_parameters()
+            
             if total_steps % opt.print_freq == 0:
                 loss_types = []
                 if opt.arch == "vae":

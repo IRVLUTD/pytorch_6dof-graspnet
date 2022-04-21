@@ -2,7 +2,7 @@ import torch
 from . import networks
 from os.path import join
 import utils.utils as utils
-from utils.visualization_utils import visualize_test
+from utils.visualization_utils import visualize_batch, visualize_test
 import numpy as np
 
 
@@ -27,6 +27,7 @@ class GraspNetModel:
         self.pcs = None
         self.pc_color = None
         self.grasps = None
+        self.obj = None
         self.task_id =None
         self.scale_transform = []
         # load/define networks
@@ -57,22 +58,24 @@ class GraspNetModel:
         input_pcs = torch.from_numpy(data['pc']).contiguous()
 
         if self.opt.arch == "evaluator":
-            targets = torch.from_numpy(data['labels']).float()
-            input_grasps = torch.from_numpy(data['target']).float()
+            self.labels = torch.from_numpy(data['labels']).float().to(self.device)
+            input_grasps = torch.from_numpy(data['target_cps']).float()
             if "task_id" in data:
                 self.task_id = torch.from_numpy(data['task_id']).float()
+            if "obj" in data:
+                self.obj = data['obj']
         else:
-            targets = torch.from_numpy(data['target_cps']).float()            
+            self.targets  = torch.from_numpy(data['target_cps']).float().to(self.device)          
             input_grasps = torch.from_numpy(data['grasp_rt']).float()
             if "scale_transform" in data:
                 self.scale_transform = torch.from_numpy(data['scale_transform']).float().to(self.device)
 
         # for color pc
-        # self.pc_color = torch.from_numpy(data["pc_color"]).contiguous()
+        self.pc_color = torch.from_numpy(data["pc_color"]).contiguous()
         self.pcs = input_pcs.to(self.device).requires_grad_(self.is_train)
         self.grasps = input_grasps.to(self.device).requires_grad_(
             self.is_train)
-        self.targets = targets.to(self.device)
+        
         
 
     # def taskgrasp_set_input(self, data):
@@ -136,7 +139,7 @@ class GraspNetModel:
             grasp_classification, confidence = out
             self.classification_loss, self.confidence_loss = self.criterion(
                 grasp_classification.squeeze(),
-                self.targets,
+                self.labels,
                 confidence,
                 self.opt.confidence_weight,
                 device=self.device)
@@ -237,5 +240,19 @@ class GraspNetModel:
             else:
 
                 predicted = torch.round(torch.sigmoid(prediction)).squeeze()
-                correct = (predicted == self.targets).sum().item()
-                return correct, len(self.targets)
+                correct = (predicted == self.labels).sum().item()
+
+                # For testing 
+                if self.opt.vis_test:
+                    data = {
+                        "pc": [self.pcs[0].cpu()],
+                        "pc_color": [self.pc_color[0].cpu()],
+                        "target_cps": self.grasps.cpu(),
+                        "labels": self.labels.cpu(),
+                        "pred_labels" : predicted.cpu(),
+                        "task_id": self.task_id.cpu(),
+                        "obj": self.obj
+                    }
+                    visualize_batch(data, True)
+
+                return correct, len(self.labels)

@@ -4,6 +4,7 @@ import mayavi.mlab as mlab
 from utils import utils, sample
 import numpy as np
 import trimesh
+from data.data_specification import TASKS
 
 
 def get_color_plasma_org(x):
@@ -23,13 +24,21 @@ def plot_mesh(mesh):
                          mesh.faces,
                          colormap='Blues')
 
-def visualize_batch(data):
+def visualize_batch(data, test = False):
     """ Visualizes all the data in the batch together with all the grasp, just for debugging """
 
     pcs = data["pc"][0]
     pc_color = data["pc_color"][0]
     grasp_pc = data["target_cps"]
     obj = data["obj"]
+    grasp_color = None
+
+    if "labels" in data:
+        print("labels: ", data["labels"])
+        grasp_color = [ (0.0, 1.0 , 0.0) if x else (1.0, 0.0, 0.0) for x in data["labels"]]
+
+    if "task_id" in data:
+        print("Task: ", [TASKS[np.nonzero(x)[0][0]] for x in data["task_id"]])
 
     print("Object:", obj)
     # grasp_pc = data[6]
@@ -39,13 +48,29 @@ def visualize_batch(data):
 
     # for i in range(num):
 
-    mlab.figure(bgcolor=(1, 1, 1))
+    mlab.figure(figure=1,bgcolor=(1, 1, 1))
     draw_scene(
         pcs,
         target_cps = grasp_pc,
         pc_color= pc_color,
+        grasp_color = grasp_color,
         dataset=1
     )
+    if test:
+        pred_grasp_color = None
+        if "pred_labels" in data:
+            print("predicted labels: ", data["pred_labels"])
+            pred_grasp_color = [ (0.0, 1.0 , 0.0) if x else (1.0, 0.0, 0.0) for x in data["pred_labels"]]
+
+        if pred_grasp_color != None:
+            mlab.figure(figure=2,bgcolor=(1, 1, 1))
+            draw_scene(
+                pcs,
+                target_cps = grasp_pc,
+                pc_color= pc_color,
+                grasp_color = pred_grasp_color,
+                dataset=1
+            )
     print('close the window to continue to next object . . .')
     mlab.show()
 
@@ -57,6 +82,9 @@ def visualize_batch_serperatly(data):
     # pc_color = data["pc_color"][0]
     # grasps = data["grasp_rt"]
     obj = data["obj"]
+
+    if "task_id" in data:
+        print("Task: ", data["task_id"])
 
     print("Object:", obj[0])
     # grasp_pc = data[6]
@@ -318,8 +346,10 @@ def draw_scene(pc,
             
         for ii in range(len(target_cps)):
 
-            
+            if grasp_color is not None:
+                gripper_color = grasp_color[ii]
 
+            
             mlab.points3d(target_cps[ii, :, 0],
                             target_cps[ii, :, 1],
                             target_cps[ii, :, 2],

@@ -69,10 +69,6 @@ class TaskGraspLoader(data.Dataset):
         self._num_tasks = len(self._tasks)
         
 
-        task1_results_file = os.path.join(
-            opt.dataset_root_folder, 'task1_results.txt')
-        assert os.path.exists(task1_results_file)
-
         self._train = opt.phase
         self._map_obj2class = map_obj2class
         data_dir = os.path.join(opt.dataset_root_folder, "scans")

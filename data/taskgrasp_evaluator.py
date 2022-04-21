@@ -11,9 +11,11 @@ except:
     from queue import Queue
 
 
-from utils.splits import get_split_data, parse_line, get_ot_pairs_taskgrasp, get_task1_hits
+from utils.splits import get_split_data, parse_line, get_ot_pairs_taskgrasp, get_task1_hits, get_valid_ot_pairs
 from utils import utils
 import copy
+
+from collections import OrderedDict
 
 
 class TaskGraspEvaluatorData(BaseDataset):
@@ -76,14 +78,18 @@ class TaskGraspEvaluatorData(BaseDataset):
         self._pc = {}
         self._grasps = {}
         self._object_task_grasp_dataset = {}
+        self._all_object_instances = {}
+        self._all_tasks = {}
+
+        self._grasp_ratio = {}
 
         start = time.time()
         correct_counter = 0
 
+        
+
         all_object_instances = []
         all_tasks = []
-
-        
         
 
         for i in tqdm.trange(len(lines)):
@@ -91,19 +97,39 @@ class TaskGraspEvaluatorData(BaseDataset):
             obj_class = self._map_obj2class[obj]
 
             all_object_instances.append(obj)
+            if obj not in self._all_object_instances:
+                self._all_object_instances[obj] = None
             all_tasks.append(task)
 
+            if obj not in self._all_tasks:
+                self._all_tasks[task] = None
+
             self._object_task_grasp_dataset["{}-{}-{}".format(obj, task, grasp_id)] = label
+        
 
-        self._all_object_instances = list(set(all_object_instances))
+        # self._all_tasks = list(set(all_tasks))
 
-        self._all_tasks = list(set(all_tasks))
+        if self._train == "train":
+            with open('instance.txt', 'w') as f:
+                for item in self._all_object_instances:
+                    f.write("%s\n" % item)
+
+        with open(self._train + self.opt.lr + '_ratio.txt', 'w') as f:
+            pass
 
         # Get valid object task pair
         # task1_results_file = os.path.join(opt.dataset_root_folder, 'task1_results.txt')
         # assert os.path.exists(task1_results_file)
         # object_task_pairs = get_object_task_pairs(task1_results_file)
 
+        task1_results_file = os.path.join(
+            opt.dataset_root_folder, 'task1_results.txt')
+        assert os.path.exists(task1_results_file)
+
+        valid_ot_pair = get_valid_ot_pairs(task1_results_file)
+
+
+        
         for obj in tqdm.tqdm(self._all_object_instances):
 
             pc_file = os.path.join(data_dir, obj, "fused_pc_clean.npy")
@@ -130,10 +156,36 @@ class TaskGraspEvaluatorData(BaseDataset):
                     self._grasps[grasp_file] = grasp
             
             for task in self._all_tasks:
-                self._data.append((pc_file, grasp_set, obj, task))
+
+                data_label_counter = {0: 0, 1: 0}
+
+                if task in valid_ot_pair[obj]:
+                    self._data.append((pc_file, grasp_set, obj, task))
+
+                    for grasp_id in range(self.opt.num_grasps_per_object):
+            
+                        key = "{}-{}-{}".format(obj, task, grasp_id)
+                        if key in self._object_task_grasp_dataset:
+                            
+                            label = self._object_task_grasp_dataset[key]
+
+                            if label:
+                                data_label_counter[1] += 1
+                            else:
+                                data_label_counter[0] += 1
+                        
+                    with open(self._train + '_ratio.txt', 'a') as f:
+                        if data_label_counter[0] + data_label_counter[1] != 0 :
+                            f.write("%s:\t%s-\t%s\n" % (obj, task, float(data_label_counter[1] / (data_label_counter[0] + data_label_counter[1]))))
+                        else:
+                            f.write("%s:\t%s- Data not exist\n" % (obj, task))
+                        
 
 
         self._len = len(self._data)
+
+        ### For testing
+        self._len = 3
 
         print('Loading files from {} took {}s; overall dataset size {}'.format(
             data_txt_splits[self._train], time.time() - start, self._len))
@@ -149,7 +201,6 @@ class TaskGraspEvaluatorData(BaseDataset):
         return ratio
 
     def __getitem__(self, index):
-
         pc_file, grasp_set, obj, task = self._data[index]
 
         pc = self._pc[pc_file]
@@ -157,8 +208,6 @@ class TaskGraspEvaluatorData(BaseDataset):
             pc, self.opt.npoints)
         pc_color = pc[:, 3:]
         pc = pc[:,:3]
-
-        data_label_counter = {0: 0, 1: 0}
 
 
         output_pcs = []
@@ -176,8 +225,6 @@ class TaskGraspEvaluatorData(BaseDataset):
         gt_control_points = utils.transform_control_points_numpy(
             np.array(output_grasps), self.opt.num_grasps_per_object, mode='rt')[:,:, :3]
         
-        correct_counter = 0
-        count = 0
 
         for grasp_id in range(self.opt.num_grasps_per_object):
             
@@ -210,21 +257,12 @@ class TaskGraspEvaluatorData(BaseDataset):
                 output_labels.append(label)
                 task_ids.append(task_id)
                 
-                count+=1
-                if label:
-                    correct_counter += 1
-                    data_label_counter[1] += 1
-                else:
-                    data_label_counter[0] += 1
 
-        with open('ratio.txt', 'a') as f:
-            # if correct_counter != 0:
-            f.write("%s:\t%s\t%s\n" % (obj, task, float(correct_counter / count)))
-            
         meta = {}
         meta['pc'] = np.array(output_pcs)
+        meta['pc_color'] = np.array(pc_color)
         meta['grasp_rt'] = np.array(output_grasps)
-        meta['target'] = np.array(output_grasps_cp)
+        meta['target_cps'] = np.array(output_grasps_cp)
         meta['labels'] = np.array(output_labels)
         meta['obj'] = np.array(output_obj)
         meta['task_id'] = np.array(torch.nn.functional.one_hot(torch.LongTensor(task_ids), self._num_tasks))

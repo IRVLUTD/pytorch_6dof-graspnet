@@ -14,7 +14,7 @@ class TestOptions(BaseOptions):
         self.parser.add_argument(
             '--split_mode',
             type=str,
-            default='o',
+            default='i',
             help="split_mode: Choose between held-out instance ('i'), tasks ('t') and classes ('o')")
         self.parser.add_argument(
             '--split_version',
@@ -29,7 +29,7 @@ class TestOptions(BaseOptions):
         )
         self.parser.add_argument('--phase',
                                  type=str,
-                                 default='val',
+                                 default='train',
                                  help='train, val, test, etc')
         self.parser.add_argument(
             '--vis_test',

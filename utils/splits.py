@@ -69,6 +69,16 @@ def get_ot_pairs_taskgrasp(task1_results_file):
     object_task_pairs = dict(object_task_pairs)
     return object_task_pairs
 
+def get_valid_ot_pairs(task1_results_file):
+    lines = read_txt_file_lines(task1_results_file)
+    object_task_pairs = defaultdict(list)
+    for line in lines:
+        assert isinstance(line, str)
+        line = line.split('\n')[0]
+        (obj_instance, task, label) = line.split('-')
+        if label not in ["False", "Weak False"]:
+            object_task_pairs[obj_instance].append(task)
+    return object_task_pairs
 
 def get_split_otg(lines, parse_func):
     assert TRAIN_SPLIT + TEST_SPLIT + VAL_SPLIT <= 1.0

@@ -16,7 +16,7 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument(
             '--save_epoch_freq',
             type=int,
-            default=1,
+            default=1000,
             help='frequency of saving checkpoints at the end of epochs')
         self.parser.add_argument(
             '--run_test_freq',
@@ -86,7 +86,7 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument(
             '--split_mode',
             type=str,
-            default='o',
+            default='i',
             help="split_mode: Choose between held-out instance ('i'), tasks ('t') and classes ('o')")
         self.parser.add_argument(
             '--split_version',
