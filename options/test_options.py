@@ -29,13 +29,24 @@ class TestOptions(BaseOptions):
         )
         self.parser.add_argument('--phase',
                                  type=str,
-                                 default='train',
+                                 default='val',
                                  help='train, val, test, etc')
         self.parser.add_argument(
             '--vis_test',
             action='store_true',
             help='visuialize pc and grasp'
         )
+
+        self.parser.add_argument(
+            '--model_name',
+            type=str,
+            default='',
+            help='Model folder name'
+        )
+
+        self.parser.add_argument('--save', action='store_true', default=False)
+        self.parser.add_argument('--visualize', action='store_true', default=False)
+
         
 
         self.is_train = False

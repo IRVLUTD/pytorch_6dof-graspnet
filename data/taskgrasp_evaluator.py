@@ -13,9 +13,7 @@ except:
 
 from utils.splits import get_split_data, parse_line, get_ot_pairs_taskgrasp, get_task1_hits, get_valid_ot_pairs
 from utils import utils
-import copy
 
-from collections import OrderedDict
 
 
 class TaskGraspEvaluatorData(BaseDataset):
@@ -78,8 +76,11 @@ class TaskGraspEvaluatorData(BaseDataset):
         self._pc = {}
         self._grasps = {}
         self._object_task_grasp_dataset = {}
-        self._all_object_instances = {}
+        self._all_object_instances = {} # converted to list later
         self._all_tasks = {}
+        self._object_classes = class_list
+
+        self._num_object_classes = len(self._object_classes)
 
         self._grasp_ratio = {}
 
@@ -94,7 +95,6 @@ class TaskGraspEvaluatorData(BaseDataset):
 
         for i in tqdm.trange(len(lines)):
             obj, obj_class, grasp_id, task, label = parse_line(lines[i])
-            obj_class = self._map_obj2class[obj]
 
             all_object_instances.append(obj)
             if obj not in self._all_object_instances:
@@ -106,16 +106,17 @@ class TaskGraspEvaluatorData(BaseDataset):
 
             self._object_task_grasp_dataset["{}-{}-{}".format(obj, task, grasp_id)] = label
         
-
+        self._all_object_instances = list(self._all_object_instances)
         # self._all_tasks = list(set(all_tasks))
 
-        if self._train == "train":
-            with open('instance.txt', 'w') as f:
-                for item in self._all_object_instances:
-                    f.write("%s\n" % item)
+        # if self._train == "train":
+        #     with open('instance.txt', 'w') as f:
+        #         for item in self._all_object_instances:
+        #             f.write("%s\n" % item)
 
-        with open(self._train + self.opt.lr + '_ratio.txt', 'w') as f:
-            pass
+
+        # with open(self._train  + '_ratio.txt', 'w') as f:
+        #     pass
 
         # Get valid object task pair
         # task1_results_file = os.path.join(opt.dataset_root_folder, 'task1_results.txt')
@@ -131,6 +132,8 @@ class TaskGraspEvaluatorData(BaseDataset):
 
         
         for obj in tqdm.tqdm(self._all_object_instances):
+
+            obj_class = self._map_obj2class[obj]
 
             pc_file = os.path.join(data_dir, obj, "fused_pc_clean.npy")
             if pc_file not in self._pc:
@@ -160,7 +163,8 @@ class TaskGraspEvaluatorData(BaseDataset):
                 data_label_counter = {0: 0, 1: 0}
 
                 if task in valid_ot_pair[obj]:
-                    self._data.append((pc_file, grasp_set, obj, task))
+
+                    self._data.append((pc_file, grasp_set, obj, obj_class, task))
 
                     for grasp_id in range(self.opt.num_grasps_per_object):
             
@@ -174,18 +178,18 @@ class TaskGraspEvaluatorData(BaseDataset):
                             else:
                                 data_label_counter[0] += 1
                         
-                    with open(self._train + '_ratio.txt', 'a') as f:
-                        if data_label_counter[0] + data_label_counter[1] != 0 :
-                            f.write("%s:\t%s-\t%s\n" % (obj, task, float(data_label_counter[1] / (data_label_counter[0] + data_label_counter[1]))))
-                        else:
-                            f.write("%s:\t%s- Data not exist\n" % (obj, task))
+                    # with open(self._train + '_ratio.txt', 'a') as f:
+                    #     if data_label_counter[0] + data_label_counter[1] != 0 :
+                    #         f.write("%s:\t%s-\t%s\n" % (obj, task, float(data_label_counter[1] / (data_label_counter[0] + data_label_counter[1]))))
+                    #     else:
+                    #         f.write("%s:\t%s- Data not exist\n" % (obj, task))
                         
 
 
         self._len = len(self._data)
 
         ### For testing
-        self._len = 3
+        # self._len = 3
 
         print('Loading files from {} took {}s; overall dataset size {}'.format(
             data_txt_splits[self._train], time.time() - start, self._len))
@@ -201,7 +205,7 @@ class TaskGraspEvaluatorData(BaseDataset):
         return ratio
 
     def __getitem__(self, index):
-        pc_file, grasp_set, obj, task = self._data[index]
+        pc_file, grasp_set, obj, obj_class, task = self._data[index]
 
         pc = self._pc[pc_file]
         pc = utils.regularize_pc_point_count(
@@ -215,57 +219,93 @@ class TaskGraspEvaluatorData(BaseDataset):
         output_grasps_cp = []
         output_labels = []
         output_obj = []
+        output_class_id = []
         task_ids = []
 
-        for grasp_file in grasp_set:
-            grasp = self._grasps[grasp_file]
-            output_grasps.append(grasp)
-    
-
-        gt_control_points = utils.transform_control_points_numpy(
-            np.array(output_grasps), self.opt.num_grasps_per_object, mode='rt')[:,:, :3]
-        
+        class_id = self._object_classes.index(obj_class)
 
         for grasp_id in range(self.opt.num_grasps_per_object):
             
             key = "{}-{}-{}".format(obj, task, grasp_id)
             if key in self._object_task_grasp_dataset:
-
-                pc_tmp = copy.deepcopy(pc)
-                grasp_pc = gt_control_points[grasp_id]
+                grasp = self._grasps[grasp_set[grasp_id]]
+                label = self._object_task_grasp_dataset[key]
                 task_id = self._tasks.index(task)
 
-                label = self._object_task_grasp_dataset[key]
-
-                latent = np.concatenate(
-                    [np.zeros(pc_tmp.shape[0]), np.ones(grasp_pc.shape[0])])
-                latent = np.expand_dims(latent, axis=1)
-                pc_tmp = np.concatenate([pc_tmp, grasp_pc], axis=0)
-
-                pc_tmp = np.concatenate([pc_tmp, latent], axis=1)
-
-                if self._transforms is not None:
-                    pc_tmp = self._transforms(pc_tmp)
-
-                # pc, grasp_pc = torch.split(pc,[pc.shape[0]-grasp_pc.shape[0], grasp_pc.shape[0]])
-
-                pc_final = pc_tmp.cpu().detach().numpy()
-                # grasp_pc = grasp_pc.cpu().detach().numpy()
-                output_pcs.append(pc_final)
+                output_grasps.append(grasp)
                 output_obj.append(obj)
-                output_grasps_cp.append(pc_final[pc_final.shape[0]-grasp_pc.shape[0]:, :3])
                 output_labels.append(label)
                 task_ids.append(task_id)
+                output_class_id.append(class_id)
+
+        # for grasp_file in grasp_set:
+        #     grasp = self._grasps[grasp_file]
+        #     output_grasps.append(grasp)
+    
+
+        gt_control_points = utils.transform_control_points_numpy(
+            np.array(output_grasps), self.opt.num_grasps_per_object, mode='rt')[:,:, :3]
+
+
+        total_cp_points = gt_control_points.shape[0] * gt_control_points.shape[1]
+        latent = np.concatenate(
+        [np.zeros(pc.shape[0]), np.ones(total_cp_points)])
+        latent = np.expand_dims(latent, axis=1)
+        pc = np.concatenate([pc, gt_control_points.reshape(total_cp_points, 3)], axis=0)
+
+        pc = np.concatenate([pc, latent], axis=1) # adding latent space
+
+        if self._transforms is not None:
+            pc = self._transforms(pc)
+        
+        pc, grasps_pc = torch.split(pc,[pc.shape[0]-total_cp_points, total_cp_points])
+
+
+        grasps_pc = grasps_pc.numpy()[:, :3]
+        grasps_pc = grasps_pc.reshape(gt_control_points.shape[0], gt_control_points.shape[1], 3)
+        pc = pc.numpy()[:, :3]
+
+        # for grasp_id in range(self.opt.num_grasps_per_object):
+            
+        #     key = "{}-{}-{}".format(obj, task, grasp_id)
+        #     if key in self._object_task_grasp_dataset:
+
+        #         pc_tmp = copy.deepcopy(pc)
+        #         grasp_pc = gt_control_points[grasp_id]
+        #         task_id = self._tasks.index(task)
+
+        #         label = self._object_task_grasp_dataset[key]
+
+        #         latent = np.concatenate(
+        #             [np.zeros(pc_tmp.shape[0]), np.ones(grasp_pc.shape[0])])
+        #         latent = np.expand_dims(latent, axis=1)
+        #         pc_tmp = np.concatenate([pc_tmp, grasp_pc], axis=0)
+
+        #         pc_tmp = np.concatenate([pc_tmp, latent], axis=1)
+
+        #         if self._transforms is not None:
+        #             pc_tmp = self._transforms(pc_tmp)
+
+        #         # pc, grasp_pc = torch.split(pc,[pc.shape[0]-grasp_pc.shape[0], grasp_pc.shape[0]])
+
+        #         pc_final = pc_tmp.cpu().detach().numpy()
+        #         # grasp_pc = grasp_pc.cpu().detach().numpy()
+        #         output_pcs.append(pc_final)
+        #         output_obj.append(obj)
+        #         output_grasps_cp.append(pc_final[pc_final.shape[0]-grasp_pc.shape[0]:, :3])
+        #         output_labels.append(label)
+        #         task_ids.append(task_id)
                 
 
         meta = {}
-        meta['pc'] = np.array(output_pcs)
-        meta['pc_color'] = np.array(pc_color)
+        meta['pc'] = np.array([pc] * len(output_grasps))
+        meta['pc_color'] = np.array([pc_color] * len(output_grasps))
         meta['grasp_rt'] = np.array(output_grasps)
-        meta['target_cps'] = np.array(output_grasps_cp)
+        meta['target_cps'] = np.array(grasps_pc)
         meta['labels'] = np.array(output_labels)
         meta['obj'] = np.array(output_obj)
-        meta['task_id'] = np.array(torch.nn.functional.one_hot(torch.LongTensor(task_ids), self._num_tasks))
+        meta['task_id'] = np.array(torch.LongTensor(task_ids))
+        meta['class_id'] = np.array(output_class_id)
         return meta
 
     def __len__(self):

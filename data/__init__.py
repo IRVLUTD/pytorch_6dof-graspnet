@@ -45,34 +45,38 @@ def CreateDataset(opt):
         evaluator_transforms = transforms.Compose(
             [
                 d_utils.PointcloudGraspToTensor(),
-                # d_utils.PointcloudGraspScale(),
-                # d_utils.PointcloudGraspRotate(axis=np.array([1.0, 0.0, 0.0])),
-                # d_utils.PointcloudGraspRotatePerturbation(),
-                # d_utils.PointcloudGraspRotate(axis=np.array([0.0, 1.0, 0.0])),
-                # d_utils.PointcloudGraspRotatePerturbation(),
-                # d_utils.PointcloudGraspRotate(axis=np.array([0.0, 0.0, 1.0])),
-                # d_utils.PointcloudGraspRotatePerturbation(),
-                # d_utils.PointcloudGraspTranslate(),
-                # d_utils.PointcloudGraspJitter(),
-                # d_utils.PointcloudGraspRandomInputDropout(),
+                d_utils.PointcloudGraspScale(),
+                d_utils.PointcloudGraspRotate(axis=np.array([1.0, 0.0, 0.0])),
+                d_utils.PointcloudGraspRotatePerturbation(),
+                d_utils.PointcloudGraspRotate(axis=np.array([0.0, 1.0, 0.0])),
+                d_utils.PointcloudGraspRotatePerturbation(),
+                d_utils.PointcloudGraspRotate(axis=np.array([0.0, 0.0, 1.0])),
+                d_utils.PointcloudGraspRotatePerturbation(),
+                d_utils.PointcloudGraspTranslate(),
+                d_utils.PointcloudGraspJitter(),
+                d_utils.PointcloudGraspRandomInputDropout(),
             ]
         )
             
         _, _, _,name2wn = pickle.load(open(os.path.join(opt.dataset_root_folder, 'misc.pkl'),'rb'))
 
-        with open('object_class.txt', 'w') as f:
-            for item, key in name2wn.items():
-                f.write("%s : %s\n" % (item, key))
+        # with open('object_class.txt', 'w') as f:
+        #     for item, key in name2wn.items():
+        #         f.write("%s : %s\n" % (item, key))
 
-        class_list = pickle.load(open(os.path.join(opt.dataset_root_folder, 'class_list.pkl'),'rb')) 
+        class_list = pickle.load(
+                open(os.path.join(
+                    opt.dataset_root_folder, 
+                    'class_list.pkl'),'rb')) if opt.use_class_list else list(
+                name2wn.values())
 
-        with open('class_list.txt', 'w') as f:
-            for item in class_list:
-                f.write("%s\n" % item)
+        # with open('class_list.txt', 'w') as f:
+        #     for item in class_list:
+        #         f.write("%s\n" % item)
 
-        with open('task.txt', 'w') as f:
-            for item in TASKS:
-                f.write("%s\n" % item)
+        # with open('task.txt', 'w') as f:
+        #     for item in TASKS:
+        #         f.write("%s\n" % item)
 
         if opt.arch == 'vae' or opt.arch == 'gan':
             from data.task_grasp_loader import TaskGraspLoader

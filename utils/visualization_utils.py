@@ -1,4 +1,6 @@
 from __future__ import print_function
+import os
+import time
 
 import mayavi.mlab as mlab
 from utils import utils, sample
@@ -38,7 +40,7 @@ def visualize_batch(data, test = False):
         grasp_color = [ (0.0, 1.0 , 0.0) if x else (1.0, 0.0, 0.0) for x in data["labels"]]
 
     if "task_id" in data:
-        print("Task: ", [TASKS[np.nonzero(x)[0][0]] for x in data["task_id"]])
+        print("Task: ", [TASKS[x] for x in data["task_id"]])
 
     print("Object:", obj)
     # grasp_pc = data[6]
@@ -48,7 +50,7 @@ def visualize_batch(data, test = False):
 
     # for i in range(num):
 
-    mlab.figure(figure=1,bgcolor=(1, 1, 1))
+    mlab.figure(figure="Truth",bgcolor=(1, 1, 1))
     draw_scene(
         pcs,
         target_cps = grasp_pc,
@@ -63,7 +65,7 @@ def visualize_batch(data, test = False):
             pred_grasp_color = [ (0.0, 1.0 , 0.0) if x else (1.0, 0.0, 0.0) for x in data["pred_labels"]]
 
         if pred_grasp_color != None:
-            mlab.figure(figure=2,bgcolor=(1, 1, 1))
+            mlab.figure(figure="Predicted",bgcolor=(1, 1, 1))
             draw_scene(
                 pcs,
                 target_cps = grasp_pc,
@@ -119,6 +121,7 @@ def visualize_test(pc, pc_color, pred_grasp_cps):
 
 def draw_scene(pc,
                grasps=[],
+               max_grasps=100,
                grasp_scores=None,
                grasp_color=None,
                gripper_color=(0, 1, 0),
@@ -130,6 +133,7 @@ def draw_scene(pc,
                pc_color=None,
                plasma_coloring=False,
                target_cps=None,
+               save_dir=None,
                dataset=0):
     """
     Draws the 3D scene for the object and the scene.
@@ -154,9 +158,10 @@ def draw_scene(pc,
         point in the point cloud pc. Each number should be between 0 and 1.
       plasma_coloring: If True, sets the plasma colormap for visualizting the 
         pc.
+      save_dir: provide absolute path to save figure instead of visualizing on the GUI
     """
     utils.intialize_dataset(dataset)
-    max_grasps = 100
+    
     grasps = np.array(grasps)
 
     if grasp_scores is not None:
@@ -363,6 +368,11 @@ def draw_scene(pc,
                         tube_radius=tube_radius,
                         opacity=1)
 
+    if save_dir is not None:
+        utils.mkdir(os.path.dirname(save_dir))
+        time.sleep(0.25)
+        mlab.savefig(filename=save_dir)
+        time.sleep(0.25)
 
     print('removed {} similar grasps'.format(removed))
 

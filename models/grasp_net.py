@@ -61,7 +61,7 @@ class GraspNetModel:
             self.labels = torch.from_numpy(data['labels']).float().to(self.device)
             input_grasps = torch.from_numpy(data['target_cps']).float()
             if "task_id" in data:
-                self.task_id = torch.from_numpy(data['task_id']).float()
+                self.task_id = torch.from_numpy(data['task_id'])
             if "obj" in data:
                 self.obj = data['obj']
         else:
@@ -95,7 +95,7 @@ class GraspNetModel:
 
     def forward(self):
         if(self.opt.dataset == 1 and self.opt.arch == "evaluator"):
-            return self.net(self.pcs, None, train=self.is_train, task = self.task_id)
+            return self.net(self.pcs, self.grasps, train=self.is_train, task = self.task_id)
         return self.net(self.pcs, self.grasps, train=self.is_train)
 
     def backward(self, out):
@@ -238,8 +238,8 @@ class GraspNetModel:
                     
                 return reconstruction_loss, 1
             else:
-
-                predicted = torch.round(torch.sigmoid(prediction)).squeeze()
+                probs = torch.sigmoid(prediction).squeeze()
+                predicted = torch.round(probs).squeeze()
                 correct = (predicted == self.labels).sum().item()
 
                 # For testing 
@@ -255,4 +255,4 @@ class GraspNetModel:
                     }
                     visualize_batch(data, True)
 
-                return correct, len(self.labels)
+                return probs, predicted, correct, len(self.labels)

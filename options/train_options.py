@@ -16,7 +16,7 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument(
             '--save_epoch_freq',
             type=int,
-            default=1000,
+            default=100,
             help='frequency of saving checkpoints at the end of epochs')
         self.parser.add_argument(
             '--run_test_freq',

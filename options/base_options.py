@@ -82,7 +82,7 @@ class BaseOptions:
             help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
         self.parser.add_argument('--checkpoints_dir',
                                  type=str,
-                                 default='./checkpoints/temp',
+                                 default='./checkpoints/',
                                  help='models are saved here')
         self.parser.add_argument(
             '--serial_batches',
@@ -209,6 +209,12 @@ class BaseOptions:
             help="True if you want to scale the point cloud by the standard deviation"
         )
 
+        self.parser.add_argument(
+            "--use_class_list",
+            action='store_false',
+            help=""
+        )
+
         
 
     def parse(self):
@@ -249,6 +255,10 @@ class BaseOptions:
 
             # save to the disk
             name = self.opt.arch
+            
+            name += "_split_mode_" + str(self.opt.split_mode)
+            name += "_split_idx_" + str(self.opt.split_idx)
+
             name += "_lr_" + str(self.opt.lr).split(".")[-1] + "_bs_" + str(
                 self.opt.batch_size)
             name += "_scale_" + str(self.opt.model_scale) + "_npoints_" + str(

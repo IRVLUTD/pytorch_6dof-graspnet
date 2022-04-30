@@ -287,9 +287,14 @@ class GraspEvaluator(nn.Module):
         # extra binary feature, which is 0 for the object and 1 for the gripper,
         # to tell these point-clouds apart and one hot encoding of 56 task
         self.evaluator = base_network(pointnet_radius, pointnet_nclusters,
-                                      model_scale, 60 if self.dataset==1 else 4)
-        self.predictions_logits = nn.Linear(1024 * model_scale, 1)
-        self.confidence = nn.Linear(1024 * model_scale, 1)
+                                      model_scale, 4)
+        # New Model
+        self.feature_size_reduction = nn.Linear(1024 * model_scale, 256)
+        self.word_embedding = nn.Embedding(56, 256)
+
+
+        self.predictions_logits = nn.Linear(512 * model_scale, 1)
+        self.confidence = nn.Linear(512 * model_scale, 1)
 
     def evaluate(self, xyz, xyz_features):
         for module in self.evaluator[0]:
@@ -297,28 +302,23 @@ class GraspEvaluator(nn.Module):
         return self.evaluator[1](xyz_features.squeeze(-1))
 
     def forward(self, pc, gripper_pc, train=True, task = None):
-        if(gripper_pc == None and task != None):
-            pc, pc_features = self.merge_features(pc, task)
-        else:
-            pc, pc_features = self.merge_pc_and_gripper_pc(pc, gripper_pc)
+        pc, pc_features = self.merge_pc_and_gripper_pc(pc, gripper_pc)
         x = self.evaluate(pc.contiguous(), pc_features.contiguous())
+
+        x = self.feature_size_reduction(x)
+
+        x = torch.cat((x, self.word_embedding(task)), 1)
+
         return self.predictions_logits(x), torch.sigmoid(self.confidence(x))
 
-    def merge_features(self, pc, task):
+    def features(self, pc):
 
         pc_shape = pc.shape
-        task_shape = task.shape
         assert (len(pc_shape) == 3)
-        assert (len(task_shape) == 2)
-        assert (pc_shape[0] == task_shape[0])
 
         xyz = pc[:, :, :3]
-        
-        task = torch.unsqueeze(task,1)
 
-        task = task.repeat(1, pc_shape[1], 1)
-
-        xyz_feature = torch.cat((pc, task), -1).transpose(-1, 1)
+        xyz_feature = pc.transpose(-1, 1)
         
         return xyz, xyz_feature
 
@@ -334,7 +334,6 @@ class GraspEvaluator(nn.Module):
         assert (len(gripper_shape) == 3)
         assert (pc_shape[0] == gripper_shape[0])
 
-        npoints = pc_shape[1]
         batch_size = pc_shape[0]
 
         l0_xyz = torch.cat((pc, gripper_pc), 1)

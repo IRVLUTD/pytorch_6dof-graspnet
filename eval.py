@@ -1,538 +1,365 @@
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
-#
-# NVIDIA CORPORATION and its licensors retain all intellectual property
-# and proprietary rights in and to this software, related documentation
-# and any modifications thereto.  Any use, reproduction, disclosure or
-# distribution of this software and related documentation without an express
-# license agreement from NVIDIA CORPORATION is strictly prohibited.
-from __future__ import print_function
-
-import numpy as np
-import yaml
-import argparse
-import numpy
-import grasp_estimator
-import copy
+import os
 import sys
-import os
-import grasp_data_reader
+import pickle
+import omegaconf
+import pytorch_lightning as pl
 import torch
-import glob
-import sample
-import json
-import subprocess
-import time
-import datetime
-import os
-from sklearn.metrics import precision_recall_curve, average_precision_score
-from scipy import spatial
-import shutil
-from utils import utils
-RADIUS = 0.02
+import numpy as np
+from tqdm import tqdm
+from pytorch_lightning.loggers import TensorBoardLogger
+from collections import defaultdict
+import matplotlib.pyplot as plt
+
+import torch.nn.functional as F
+from data import DataLoader
+
+from data.data_specification import TASKS, TASKS_SG14K
+from models import create_model
+from options.test_options import TestOptions
+from options.train_options import TrainOptions
+from utils.splits import get_ot_pairs_taskgrasp
+from utils.utils import intialize_dataset, mkdir
+from utils.visualization_utils import draw_scene
+
+BASE_DIR = os.path.dirname(__file__)
+sys.path.append(os.path.join(BASE_DIR, '../'))
+
+DEVICE = "cuda"
+
+# def visualize_batch(pc, grasps):
+#     """ Visualizes all the data in the batch, just for debugging """
+
+#     for i in range(pc.shape[0]):
+#         pcc = pc[i, :, :3]
+#         grasp = grasps[i, :, :]
+#         draw_scene(pcc, [grasp, ])
 
 
-def default(obj):
-    if type(obj).__module__ == np.__name__:
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        else:
-            return obj.item()
-    raise TypeError('Unknown type:', type(obj))
+# def visualize_batch_wrong(pc, grasps, labels, preds):
+#     """ Visualizes incorrect predictions """
 
+#     for i in range(pc.shape[0]):
+#         if labels[i] != preds[i]:
+#             print('labels {}, prediction {}'.format(labels[i], preds[i]))
+#             pcc = pc[i, :, :3]
+#             grasp = grasps[i, :, :]
+#             draw_scene(pcc, [grasp, ])
 
-def create_directory(path, delete_if_exist=False):
-    if not os.path.isdir(path):
-        os.makedirs(path)
+def main(opt, save=False, visualize=False, experiment_dir=None):
+
+    _, _, _, name2wn = pickle.load(
+        open(os.path.join(
+            opt.dataset_root_folder, 
+            'misc.pkl'),'rb'))
+    
+    class_list = pickle.load(
+        open(os.path.join(
+            opt.dataset_root_folder, 
+            'class_list.pkl'),'rb')) if opt.use_class_list else list(
+        name2wn.values())
+
+    opt.serial_batches = True  # no shuffle
+    datasetIterator = DataLoader(opt)
+    model = create_model(opt)
+
+    all_preds = []
+    all_probs = []
+    all_labels = []
+    all_data_vis = {}
+    all_data_pc = {}
+
+    # Our data annotation on MTurk happens in 2 stages, see paper for more details
+
+    # Only considering Stage 2 grasps
+    task1_results_file = os.path.join(
+        opt.dataset_root_folder, 'task1_results.txt')
+    assert os.path.exists(task1_results_file)
+
+    if opt.dataset == 1:
+        object_task_pairs = get_ot_pairs_taskgrasp(task1_results_file)
+        TASK2_ot_pairs = object_task_pairs['True'] + \
+            object_task_pairs['Weak True']
+        TASK1_ot_pairs = object_task_pairs['False'] + \
+            object_task_pairs['Weak False']
     else:
-        if delete_if_exist:
-            print('***************** deleting folder ', path)
-            shutil.rmtree(path)
-            os.makedirs(path)
+        raise ValueError('Unknown class {}'.format(opt.dataset))
 
+    all_preds_2 = []
+    all_probs_2 = []
+    all_labels_2 = []
 
-def make_parser(argv):
-    """
-      Outputs a parser.
-    """
-    parser = argparse.ArgumentParser(
-        description='Evaluators',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--grasp_sampler_folder', type=str, default='')
-    parser.add_argument('--grasp_evaluator_folder', type=str, default='')
-    parser.add_argument('--eval_data_folder', type=str, default='')
-    parser.add_argument('--generate_data_if_missing', type=int, default=0)
-    parser.add_argument('--dataset_root_folder', type=str, default='')
-    parser.add_argument('--num_experiments', type=int, default=100)
-    parser.add_argument('--eval_split', type=str, default='test')
-    parser.add_argument('--eval_grasp_evaluator', type=int, default=0)
-    parser.add_argument('--eval_vae_and_evaluator', type=int, default=1)
-    parser.add_argument('--output_folder', type=str, default='')
-    parser.add_argument('--gradient_based_refinement',
-                        action='store_true',
-                        default=False)
+    all_preds_2_v2 = defaultdict(dict)
+    all_probs_2_v2 = defaultdict(dict)
+    all_labels_2_v2 = defaultdict(dict)
 
-    return parser.parse_args(argv[1:])
+    # Only considering Stage 1 grasps
+    all_preds_1 = []
+    all_probs_1 = []
+    all_labels_1 = []
 
+    print('Running evaluation on Test set')
+    with torch.no_grad():
+        for data in tqdm(datasetIterator):
 
-class Evaluator():
-    def __init__(self,
-                 cfg,
-                 create_data_if_not_exist,
-                 output_folder,
-                 eval_experiment_folder,
-                 num_experiments,
-                 eval_grasp_evaluator=False,
-                 eval_vae_and_evaluator=True):
-        self._should_create_data = create_data_if_not_exist
-        self._eval_experiment_folder = eval_experiment_folder
-        self._num_experiments = num_experiments
-        self._grasp_reader = grasp_data_reader.PointCloudReader(
-            root_folder=cfg.dataset_root_folder,
-            batch_size=cfg.num_grasps_per_object,
-            num_grasp_clusters=cfg.num_grasp_clusters,
-            npoints=cfg.npoints,
-            min_difference_allowed=(0, 0, 0),
-            max_difference_allowed=(3, 3, 0),
-            occlusion_nclusters=0,
-            occlusion_dropout_rate=0.,
-            use_uniform_quaternions=False,
-            ratio_of_grasps_used=1,
-        )
-        self._cfg = cfg
-        self._grasp_estimator = grasp_estimator.GraspEstimator(cfg)
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(self._cfg.gpu)
-        self._sess = tf.Session()
-        del os.environ['CUDA_VISIBLE_DEVICES']
-        self._grasp_estimator.build_network()
-        self._eval_grasp_evaluator = eval_grasp_evaluator
-        self._eval_vae_and_evaluator = eval_vae_and_evaluator
-        self._flex_initialized = False
-        self._output_folder = output_folder
-        self.update_time_stamp()
+            model.set_input(data)
+            probs, preds, _, _ = model.test()
 
-    def read_eval_scene(self, file_path, visualize=False):
-        if not os.path.isfile(file_path):
-            if not self._should_create_data:
-                raise ValueError('could not find data {}'.format(file_path))
+            try:
+                preds = preds.cpu().numpy()
+                probs = probs.cpu().numpy()
+                labels = data['labels']
 
-            json_path = self._grasp_reader.generate_object_set(
-                self._cfg.eval_split)
-            obj_grasp_data = self._grasp_reader.read_grasp_file(
-                os.path.join(self._cfg.dataset_root_folder, json_path), True)
-            obj_pose = self._grasp_reader.arrange_objects(
-                obj_grasp_data[-3])[0]
-            in_camera_pose = None
-            print('changing object to ', obj_grasp_data[-2])
-            self._grasp_reader.change_object(obj_grasp_data[-2],
-                                             obj_grasp_data[-1])
-            pc, camera_pose, in_camera_pose = self._grasp_reader.render_random_scene(
-                None)
-            folder_path = file_path[:file_path.rfind('/')]
-            create_directory(folder_path)
+                all_preds += list(preds)
+                all_probs += list(probs)
+                all_labels += list(labels)
+            except TypeError:
+                all_preds.append(preds.tolist())
+                all_probs.append(probs.tolist())
+                all_labels.append(labels.tolist()[0])
 
-            print('writing {}'.format(file_path))
-            np.save(file_path, {'json': json_path, 'obj_pose': obj_pose, 'camera_pose': in_camera_pose})
-        else:
-                    
-                   
-                   
-                
-            d = np.load(file_path).item()
-            json_path = d['json']
-            obj_pose = d['obj_pose']
-            obj_grasp_data = self._grasp_reader.read_grasp_file(
-                os.path.join(self._cfg.dataset_root_folder, json_path), True
-            )in_camera_pose = d['camera_pose']
-            self._grasp_reader.change_object(obj_grasp_data[-2], obj_grasp_data[-1])
-            pc, camera_pose, _= self._grasp_reader.render_random
-                                            _scene(in_camera_pose)
-         
-                
-        pos_grasps = np.matmul(np.expand_dims(camera_pose, 0), obj_grasp_data[0])
-        neg_grasps = np.matmul(np.expand_dims(camera_pose, 0),
-                               obj_grasp_data[2])
-        grasp_labels = np.hstack(
-                              
-            (np.ones(pos_grasps.shape[0]), np.zeros(neg_grasps.shape[0]))).astype(np.int32)
-        grasps = np.concatenate((pos_grasp
-            s, neg_grasps), 0)
-        
-if visualize:
-            from visualization_utils import draw_scene
-            import mayavi.mlab as mlab
+            tasks = data['task_id']
+            obj = data['obj']
+            for i in range(tasks.shape[0]):
+                task = tasks[i]
+                task = TASKS[task]
+                obj_instance_name = obj[i]
+                ot = "{}-{}".format(obj_instance_name, task)
 
-            pos_mask = np.logical_and(grasp_labels == 1, np.random.rand(*grasp_labels.shape) < 0.1)
-            neg_mask = np.logical_and(
-                grasp_labels == 0,
-                np.random.rand(*grasp_labels.shape) < 0.01)
+                try:
+                    pred = preds[i]
+                    prob = probs[i]
+                    label = labels[i]
+                except IndexError:
+                    # TODO: This is very hacky, fix it
+                    pred = preds.tolist()
+                    prob = probs.tolist()
+                    label = labels.tolist()[0]
 
-                
-               
-            print(grasps[pos_mask, :, :].shape, grasps[neg_mask, :, :].shape)
-            draw_scene(pc, grasps[pos_mask, :, :])
-            mlab.show()
+                if ot in TASK2_ot_pairs:
+                    all_preds_2.append(pred)
+                    all_probs_2.append(prob)
+                    all_labels_2.append(label)
 
-            draw_scene(pc, grasps[neg_mask, :, :])
-            mlab.show()
+                    try:
+                        all_preds_2_v2[obj_instance_name][task].append(pred)
+                        all_probs_2_v2[obj_instance_name][task].append(prob)
+                        all_labels_2_v2[obj_instance_name][task].append(label)
 
-        return pc[:, :3], grasps, grasp_labels, {'cad_path': obj_grasp_data[-2], 'cad_scale': obj_grasp_data[-1], 'to_canonical_transformation': grasp_data_reader.inverse_transform(camera_pose)}
-    
-            
-           
-           
-           
-           
-           
-    }
-    def eval_scene(self, file_path, visualize=False):
-        """
-          Returns full_results, evaluator_results.
-            full_results: Contains information about grasps in canonical pose, scores,
-              ground truth positive grasps, and also cad path and scale that is used for
-              flex evaluation.
-            evaluator_results: Only contains information for the classification of positive
-              and negative grasps. The info is gt label of each grasp, predicted score for
-              each grasp, and the 4x4 transformation of each grasp.
-        """
-        pc, grasps, grasps_label, flex_info = self.read_eval_scene(file_path)
-        canonical_transform = flex_info['to_canonical_transformation']
-        evaluator_result = None
-        full_results = None
-        if self._eval_grasp_evaluator:
-            latents = self._grasp_estimator.sample_latents()
-            output_grasps, output_scores, _ = self._grasp_estimator.predict_grasps(
-                self._sess,
-                pc, latents, 0, grasps_rt=gevaluator_result = (grasps_label, output_scores, output_grasps)
+                    except KeyError:
+                        all_preds_2_v2[obj_instance_name][task] = [pred, ]
+                        all_probs_2_v2[obj_instance_name][task] = [prob, ]
+                        all_labels_2_v2[obj_instance_name][task] = [label, ]
 
+                elif ot in TASK1_ot_pairs:
+                    all_preds_1.append(pred)
+                    all_probs_1.append(prob)
+                    all_labels_1.append(label)
+                elif ot in ROUND1_GOLD_STANDARD_PROTOTYPICAL_USE:
+                    all_preds_2.append(pred)
+                    all_probs_2.append(prob)
+                    all_labels_2.append(label)
 
-            latents = np.random.rand(self._cfg.num_samples, self._cfg.latent_size) * 4 - 2
-            print(pc.shape)
-                                    
-            generated_grasps, generated_scores, _ = self._grasp_estimator.predict_grasps(
-                self._sess,
-                pc,
-                latents,
-                num_refine_steps=self._cfg.num_refine_steps,
-            )
+                    try:
+                        all_preds_2_v2[obj_instance_name][task].append(pred)
+                        all_probs_2_v2[obj_instance_name][task].append(prob)
+                        all_labels_2_v2[obj_instance_name][task].append(label)
 
-            gt_pos_grasps = [g for g, l in zip(grasps, grasps_label) if l == 1]
-            gt_pos_grasps = np.asarray(gt_pos_grasps).copy()
-            gt_pos_grasps_canonical = np.matmul(canonical_transform, gt_pos_grasps)
-            generated_grasps = np.asarray(generated_grasps)
-                                               
-            print(generated_grasps.shape)
-            generated_grasps_canonical = np.matmul(canonical_transform, generated_grasps)
-            
-                                                  
-            obj = sample.Object(flex_info['cad_path'])
-            obj.rescale(flex_info['cad_scale'])
-            mesh = obj.mesh
-            mesh_mean = np.mean(mesh.vertices, 0, keepdims=True)
+                    except KeyError:
+                        all_preds_2_v2[obj_instance_name][task] = [pred, ]
+                        all_probs_2_v2[obj_instance_name][task] = [prob, ]
+                        all_labels_2_v2[obj_instance_name][task] = [label, ]
 
-            canonical_pc = pc.dot(canonical_transform[:3, :3].T)
-            canonical_pc += np.expand_dims(canonical_transform[:3, 3], 0)
+                else:
+                    raise Exception('Unknown ot {}'.format(ot))
 
-            gt_pos_grasps_canonical[:, :3, 3] += mesh_mean
-            canonical_pc += mesh_mean
-            generated_grasps_canonical[:, :3, 3] += mesh_mean
-            
-if visualize:
-                from visualization_utils import draw_scene
-                import mayavi.mlab as mlab
+            if visualize or save:
 
-                draw_scene(canonical_pc, grasps=gt_pos_grasps_canonical, mesh=mesh)
-                mlab.show()
-                          
-                          
+                pc = data['pc']
+                grasps = data['grasp_rt']
+                classes = data["class_id"]
+                pc_color = data['pc_color']
 
-                
-                mlab.show()
-                          
-                          
-                          
-            
-full_results = (generated_grasps_canonical, generated_scores, gt_pos_grasps_canonical, flex_info['cad_path'], flex_info['cad_scale'])
+                # Uncomment the following for debugging
+                # visualize_batch(pc, grasps)
+                # visualize_batch_wrong(pc, grasps, labels, preds)
 
-                           
-                           
-        return full_results, evaluator_result
+                for i in range(pc.shape[0]):
+                    pc_i = pc[i, :, :]
+                    # pc_i = pc_i[np.where(pc_i[:, 3] == 0), :3].squeeze(0)
+                    pc_color_i = pc_color[i, :, :3]
+                    pc_i = np.concatenate([pc_i, pc_color_i], axis=1)
+                    grasp = grasps[i, :, :]
+                    task = tasks[i]
+                    task = TASKS[task]
+                    obj_instance_name = obj[i]
+                    obj_class = classes[i]
+                    obj_class = class_list[obj_class]
 
-    
-        self._signature = self._get_current_time_stamp()
+                    try:
+                        pred = preds[i]
+                        prob = probs[i]
+                        label = labels[i]
+                    except IndexError:
+                        pred = preds.tolist()
+                        prob = probs.tolist()
+                        label = labels.tolist()[0]
 
+                    ot = "{}-{}".format(obj_instance_name, task)
+                    grasp_datapt = (grasp, prob, pred, label)
+                    if ot in all_data_vis:
+                        all_data_vis[ot].append(grasp_datapt)
+                        all_data_pc[ot] = pc_i
+                    else:
+                        all_data_vis[ot] = [grasp_datapt, ]
+                        all_data_pc[ot] = pc_i
 
-        """No Comments."""
-        now = datetime.datetime.now()
-        return now.strftime("%Y-%m-%d_%H-%M")
+    # Stage 1+2 grasps
+    all_preds = np.array(all_preds)
+    all_probs = np.array(all_probs)
+    all_labels = np.array(all_labels)
+    random_probs = np.random.uniform(low=0, high=1, size=(len(all_probs)))
+    results = {
+        'preds': all_preds,
+        'probs': all_probs,
+        'labels': all_labels,
+        'random': random_probs}
 
+    # Only Stage 2 grasps
+    all_preds_2 = np.array(all_preds_2)
+    all_probs_2 = np.array(all_probs_2)
+    all_labels_2 = np.array(all_labels_2)
+    random_probs_2 = np.random.uniform(low=0, high=1, size=(len(all_probs_2)))
+    results_2 = {
+        'preds': all_preds_2,
+        'probs': all_probs_2,
+        'labels': all_labels_2,
+        'random': random_probs_2}
 
-        """
-        Evaluates all of the test scenes.
+    # Only Stage 1 grasps
+    all_preds_1 = np.array(all_preds_1)
+    all_probs_1 = np.array(all_probs_1)
+    all_labels_1 = np.array(all_labels_1)
+    random_probs_1 = np.random.uniform(low=0, high=1, size=(len(all_probs_1)))
+    results_1 = {
+        'preds': all_preds_1,
+        'probs': all_probs_1,
+        'labels': all_labels_1,
+        'random': random_probs_1}
 
-        Args:
-          plot_curves: bool, if True, plots the coressponding figure
-            for each of the evaluations.
-        """
-        self._grasp_estimator.load_weights(self._sess)
-        
-create_directory(self._eval_experiment_folder)
-        
-num_digits = len(str(self._num_experiments))
-        
-all_eval_results = []
-        all_full_results = []
-        
-for i in range(self._num_experiments):
-            full_result, eval_result = self.eval_scene(os.path.join(self._eval_experiment_folder, 'eval_configs', str(i).zfill(num_digits)) + '.npy', False)
-            if full_result is not None:
-                
-                            
-                grasps, scores, gt_grasps, cad_path, cad_scale = full_result
-                experiment_folder = os.path.join(self._eval_experiment_folder, 'flex_folder', str(i).zfill(num_digits))
-                flex_outcomes = self.eval_grasps_on_flex(grasps, cad_path, cad
-                                                _scale, experim
-                                                ent_folder)
-                all_full_results.append((grasps, scores, 
-                    flex_outcomes, gt_grasps))
-            
-                    
-if eval_result is not None:
-                all_eval_results.append(eval_result)
-        
-if len(all_eval_results) > 0:
-            self.metric_classification_mean_ap(
-                [x[0] for x in all_eval_results],
-                [x[1] for x in all_eval_results], 
-                plot_curves)
-if len(all_full_results) > 0:
-            self.metric_coverage_success_rate(
-                [x[0] for x in all_full_result[x[1] for x in all_full_results],
-                                              [x[2] for x in all_full_results],
-                                              [x[3] for x in all_full_results],
-                                              plot_curves
-            )                  plot_curves
-    def metric_classification_mean_ap(self, gt_labels_list, scores_list, visualize):
-        """
-                                     
-        Computes the average precision metric for evaluator.
+    # Only Stage 2 grasps
+    random_probs_2 = np.random.uniform(low=0, high=1, size=(len(all_probs_2)))
+    results_2_v2 = {
+        'preds': all_preds_2_v2,
+        'probs': all_probs_2_v2,
+        'labels': all_labels_2_v2,
+        'random': random_probs_2}
 
-        Args:
-          gt_labels_list: list of binary numbers indicating the success of 
-            grasps. 1 means grasp is successful and 0 means failure.
-          scores_list: list of float numbers for the score of each grasp.
-          visualize: bool, if True, visualizes the plots.
-        
-        Returns:
-          average_precision: area under the curve for precision-recall plot.
-          best_threshold: float, best threshold that has the highest f-1 
-            measure.
-        """
-        all_gt_labels = []
-        all_scores = []
-        if len(gt_labels_list) != len(scores_list):
-            raise ValueError("Length of the lists should match")
-        
-for gt_labels in gt_labels_list:
-            all_gt_labels += [l for l in gt_labels]
-        for scores in scores_list:
-            all_scores += [s for s in scores]
-        
-precision, recall, thresholds = precision_recall_curve(all_gt_labels, all_scores)
-        average_precision = average_precision_score(all_gt_labe
-            ls, all_scores)
-        f1_score = 2 * (precision * recall) / (precision + recall)
+    if save:
+        mkdir(os.path.join(experiment_dir, 'results'))
+        pickle.dump(
+            results,
+            open(
+                os.path.join(
+                    experiment_dir,
+                    'results',
+                    "results.pkl"),
+                'wb'))
 
-        best_threshold = thresholds[np.argmax(f1_score)]
-        if visualize:
-            import matplotlib.pyplot as plt
-            plt.plot(recall, precision)
+        mkdir(os.path.join(experiment_dir, 'results1'))
+        pickle.dump(
+            results_1,
+            open(
+                os.path.join(
+                    experiment_dir,
+                    'results1',
+                    "results.pkl"),
+                'wb'))
 
-            plt.xlabel('Recall')
-            plt.ylabel('Precision')
-            plt.ylim([0.0, 1.05])
-            plt.xlim([0.0, 1.0])
-            plt.title('2-class Precision-Recall curve: AP={0:02f}, best_treshold = {0:02f}'.format(
-                    av
-                erage_precision, best_threshold))
-            plt..format(()
-        
-np.save(
-            os.path.join(self._output_folder, '{}_evalauator.npy'.format(self._signature)),
-            {'cfg':self._cfg, 'precisions': p
-                        recision, 'recalls': recall, 'average_precisio {n': average_precision, 'best_threshold': best_threshold}
-           )               
-                            
-                            
-                            
-                            
-                 })
-        return average_precision, best_threshold
-    
-def metric_coverage_success_rate(self, grasps_list, scores_list, flex_outcomes_list, gt_grasps_list, visualize):
-        """
-                                    
-                                    
-        Computes the coverage success rate for grasps of multiple objects.
+        mkdir(os.path.join(experiment_dir, 'results2'))
+        pickle.dump(
+            results_2,
+            open(
+                os.path.join(
+                    experiment_dir,
+                    'results2',
+                    "results.pkl"),
+                'wb'))
 
-        Args:
-          grasps_list: list of numpy array, each numpy array is the predicted
-            grasps for each object. Each numpy array has shape (n, 4, 4) where
-            n is the number of predicted grasps for each object.
-          scores_list: list of numpy array, each numpy array is the predicted
-            scores for each grasp of the corresponding object.
-          flex_outcomes_list: list of numpy array, each element of the numpy
-            array indicates whether that grasp succeeds in grasping the object
-            or not.
-          gt_grasps_list: list of numpy array. Each numpy array has shape of
-            (m, 4, 4) where m is the number of groundtruth grasps for each
-            object.
-          visualize: bool. If True, it will plot the curve.
-        
-        Returns:
-          auc: float, area under the curve for the success-coverage plot.
-        """
-        all_trees = []
-        all_grasps = []
-        all_object_indexes = []
-        all_scores = []
-        all_flex_outcomes = []
-        visited = set()
-        tot_num_gt_grasps = 0
-        for i in range(len(grasps_list)):
-            print('building kd-tree {}/{}'.format(i, len(grasps_list)))
-            gt_grasps = np.asarray(gt_grasps_list[i]).copy()
-            all_trees.append(spatial.KDTree(gt_grasps[:, :3, 3]))
-            tot_num_gt_grasps += gt_grasps.shape[0]
+    if save or visualize:
+        mkdir(os.path.join(experiment_dir, 'results2_ap'))
+        pickle.dump(
+            results_2_v2,
+            open(
+                os.path.join(
+                    experiment_dir,
+                    'results2_ap',
+                    "results.pkl"),
+                'wb'))
 
-            for g, s, f in zip(grasps_list[i], scores_list[i], flex_outcomes_list[i]):
-                all_grasps.append(np.asarray(g).copy())
-                              
-                all_object_indexes.append(i)
-                all_scores.append(s)
-                all_flex_outcomes.append(f)
-        
-all_grasps = np.asarray(all_grasps)
-        
-all_scores = np.asarray(all_scores)
-        order = np.argsort(-all_scores)
-        num_covered_so_far = 0
-        correct_grasps_so_far = 0
-        num_visited_grasps_so_far = 0
+        # TODO - Write separate script for loading and visualizing predictions
+        # mkdir(os.path.join(experiment_dir, 'visualization_data'))
+        # pickle.dump(
+        #     all_data_vis,
+        #     open(
+        #         os.path.join(
+        #             experiment_dir,
+        #             'visualization_data',
+        #             "predictions.pkl"),
+        #         'wb'))
 
-        precisions = []
-        recalls = []
-        prev_score = None
+    if visualize:
 
-        for oindex, index in enumerate(order):
-            if oindex % 1000 == 0:
-                print(oindex, len(order))
-            
-object_id = all_object_indexes[index]
-            close_indexes = all_trees[object_id].query_ball_point(all_grasps[index, :3, 3], RADIUS)
+        mkdir(os.path.join(experiment_dir, 'visualization'))
+        mkdir(os.path.join(experiment_dir, 'visualization', 'task1'))
+        mkdir(os.path.join(experiment_dir, 'visualization', 'task2'))
 
-                
-            num_new_covered_gt_grasps = 0
+        print('saving ot visualizations')
+        for ot in all_data_vis.keys():
 
-            for close_index in close_indexes:
-                key = (object_id, close_index)
-                if key in visited:
-                    continue
-                
-visited.add(key)
-                num_new_covered_gt_grasps += 1
-
-            correct_grasps_so_far += all_flex_outcomes[index]
-            num_visited_grasps_so_far += 1
-            num_covered_so_far += num_new_covered_gt_grasps
-
-            if prev_score is not None and abs(prev_score - all_scores[index]) < 1e-3:
-                precisions[-1] = float(correct_grasps_so_f
-                                             ar) / num_visited_grasps_so_far
-                recalls[-1] = float(num
-                    _covered_so_far) / tot_num_gt_grasps
+            if ot in TASK1_ot_pairs:
+                save_dir = os.path.join(
+                    experiment_dir, 'visualization', 'task1')
+            elif ot in TASK2_ot_pairs:
+                save_dir = os.path.join(
+                    experiment_dir, 'visualization', 'task2')
             else:
-                precisions.append(float(correct_grasps_so_far) / num_visited_grasps_so_far)
-                recalls.append(flo
-                    at(num_covered_so_far) / tot_num_gt_grasps)
-                prev_score = all_scores[index]
-        
-auc = 0
-        for i in range(1, len(precisions)):
-            auc += (recalls[i] - recalls[i-1]) * (precisions[i] + precisions[i-1]) * 0.5
-          
-                                                     
-if visualize:
-            import matplotlib.pyplot as plt
-            plt.plot(recalls, precisions)
-            plt.title('auc = {0:02f}'.format(auc))
-            plt.ylim([0.0, 1.05])
-            plt.xlim([0.0, 1.0])
-            plt.show()
-        
-print('auc = {}'.format(auc))
-        np.save(
-            os.path.join(self._output_folder, '{}_vae+evaluator.npy'.format(self._signature)),
-            {'precisions': precisions, 'recal
-                        ls': recalls, 'auc': auc, 'cfg': self._cfg} {
-        )                 
-                            
-                            
-                            
-                         })
-return auc
+                continue
 
-def eval_grasps_on_flex(self, grasps, cad_path, cad_scale, experiment_folder):
-        """
-                           
-        Evaluates the graps on flex physics engine and determines whether the
-        grasps will succeed or not.
+            pc = all_data_pc[ot]
+            grasps_ot = all_data_vis[ot]
+            grasps = [elem[0] for elem in grasps_ot]
+            probs = np.array([elem[1] for elem in grasps_ot])
+            preds = np.array([elem[2] for elem in grasps_ot])
+            labels = np.array([elem[3] for elem in grasps_ot])
 
-        Args:
-          grasps: numpy array list of grasps for an object.
-          cad_path: string, path to the obj/stl file of the object.
-          cad_scale: float, the scale that is applied to the mesh of the 
-            object.
-          experiment_folder: the folder that is used to copy the temp files
-            necessary for running the jobs and also aggregating the results.
-        
-        Returns:
-          grasp_success: list of binary numbers. 0 means that the grasp failed,
-            and 1 means that the grasp succeeded.
-        """
-        raise NotImplementedError("The code for grasp evaluation is not released")
+            grasp_color = np.stack(
+                [np.ones(labels.shape[0]) - labels, labels, np.zeros(labels.shape[0])], axis=1)
+            draw_scene(pc, grasps, grasp_color=list(grasp_color), max_grasps=len(
+                grasps), save_dir=os.path.join(save_dir, '{}_gt.png'.format(ot)))
 
-            
-    def __del__(self):
-        del self._grasp_reader
+            grasp_color = np.stack(
+                [np.ones(preds.shape[0]) - preds, preds, np.zeros(preds.shape[0])], axis=1)
+            draw_scene(pc, grasps, grasp_color=list(grasp_color), max_grasps=len(
+                grasps), save_dir=os.path.join(save_dir, '{}_pred.png'.format(ot)))
+
+            grasp_color = np.stack(
+                [np.ones(probs.shape[0]) - probs, probs, np.zeros(probs.shape[0])], axis=1)
+            draw_scene(pc, grasps, grasp_color=list(grasp_color), max_grasps=len(
+                grasps), save_dir=os.path.join(save_dir, '{}_probs.png'.format(ot)))
 
 
-if __name__ == '__main__':
-    args = make_parser(sys.argv)
-    utils.mkdir(args.output_folder)
-    
-    grasp_sampler_args = utils.read_checkpoint_args(args.grasp_sampler_folder)
-    grasp_sampler_args.is_train = False
-    grasp_evaluator_args = utils.read_checkpoint_args(
-        args.grasp_evaluator_folder)
-    grasp_evaluator_args.continue_train = True
-    if args.gradient_based_refinement:
-        args.num_refine_steps = 10
-        args.refinement = "gradient"
-    else:
-        args.num_refine_steps = 20
-        args.refinement = "sampling"
- 
-    estimator = grasp_estimator.GraspEstimator(grasp_sampler_args,
-                                               grasp_evaluator_args, args)
-    evaluator = Evaluator(
-        cfg,
-        args.generate_data_if_missing,
-        args.output_folder,
-        args.eval_data_folder,
-        args.num_experiments,
-        eval_grasp_evaluator=args.eval_grasp_evaluator,
-        eval_vae_and_evaluator=args.eval_vae_and_evaluator,
-    )
-    evaluator.eval_all(True)
-    del evaluator
-    
+if __name__ == "__main__":
+
+    opt = TestOptions().parse()
+
+    opt.name = opt.model_name
+
+    intialize_dataset(opt.dataset)
+
+    experiment_dir = os.path.join(opt.checkpoints_dir, opt.name)
+
+    main(
+        opt,
+        save=opt.save,
+        visualize=opt.visualize,
+        experiment_dir=experiment_dir)

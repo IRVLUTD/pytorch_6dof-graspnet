@@ -3,6 +3,7 @@ from data import DataLoader
 from models import create_model
 from utils.writer import Writer
 from utils.utils import intialize_dataset
+import argparse
 
 
 def run_test(epoch=-1, name=""):
@@ -11,7 +12,10 @@ def run_test(epoch=-1, name=""):
     intialize_dataset(opt.dataset)
 
     opt.serial_batches = True  # no shuffle
-    opt.name = name
+    if not opt.model_name:
+        opt.name = name
+    else:
+        opt.name = opt.model_name
     dataset = DataLoader(opt)
     model = create_model(opt)
     writer = Writer(opt)
@@ -20,7 +24,7 @@ def run_test(epoch=-1, name=""):
 
     for i, data in enumerate(dataset):
         model.set_input(data)
-        ncorrect, nexamples = model.test()
+        _, _, ncorrect, nexamples = model.test()
         writer.update_counter(ncorrect, nexamples)
     writer.print_acc(epoch, writer.acc)
     return writer.acc
