@@ -9,6 +9,7 @@ from utils import sample
 import torch
 import yaml
 from easydict import EasyDict as edict
+from yaml import Loader
 
 GRIPPER_PC = np.load('gripper_models/panda_pc.npy',
                      allow_pickle=True).item()['points']
@@ -563,7 +564,10 @@ def qeuler(q, order, epsilon=0):
 
 
 def read_checkpoint_args(folder_path):
-    return edict(yaml.load(open(os.path.join(folder_path, 'opt.yaml'))))
+    with open(os.path.join(folder_path, 'opt.yaml'), 'r') as f:
+        return edict(yaml.load(f, Loader=Loader))
+
+    # return edict(yaml.load(open(os.path.join(folder_path, 'opt.yaml'))))
 
 
 def choose_grasps_better_than_threshold(eulers,
