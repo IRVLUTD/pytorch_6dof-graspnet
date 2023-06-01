@@ -36,7 +36,8 @@ def draw_scene(pc,
                min_seperation_distance=0.03,
                pc_color=None,
                plasma_coloring=False,
-               target_cps=None):
+               target_cps=None,
+               gripper='panda'):
     """
     Draws the 3D scene for the object and the scene.
     Args:
@@ -194,8 +195,12 @@ def draw_scene(pc,
                 gripper_color = (0.0, 1.0, 0.0)
 
         if show_gripper_mesh:
-            gripper_mesh = sample.Object(
-                'gripper_models/panda_gripper.obj').mesh
+            if gripper == 'fetch':
+                gripper_mesh = sample.Object(
+                    'gripper_models/fetch_gripper.obj').mesh
+            else:
+                gripper_mesh = sample.Object(
+                    'gripper_models/panda_gripper.obj').mesh
             gripper_mesh.apply_transform(g)
             mlab.triangular_mesh(
                 gripper_mesh.vertices[:, 0],
