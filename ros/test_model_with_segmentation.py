@@ -311,6 +311,7 @@ class PointToGraspPubSub:
         self.frame_stamp = None
         self.frame_id = None
         self.base_frame = 'base_link'
+        self.SCALING_FACTOR = 0.8
 
         # Create the transform the aligns Fetch with Panda Grasp
         # Apply the generated grasp pose on this transform to get pose for Fetch Gripper
@@ -356,13 +357,26 @@ class PointToGraspPubSub:
             frame_stamp = self.frame_stamp
         print('===================================================')
         # run the network
+
+        # Scale the points using scaling factor before passing through the network
+        center = np.mean(points_base, axis=0)
+        points_base -= center
+        points_base *= self.SCALING_FACTOR
+        points_base += center
         gen_grasps, gen_scores = self.estimator.generate_and_refine_grasps(
             points_base)
+        
+        # Invert the scaling for the translation part of grasp pose
+        # Rotation is not afffected
+        for g in gen_grasps:
+            g[:3, 3] -= center 
+            g[:3, 3] * (1.0/self.SCALING_FACTOR)
+            g[:3, 3] += center
+
         # arg sort the grasps using scores with highest score first
         sort_index = sorted(range(len(gen_scores)), key=lambda i: gen_scores[i], reverse=True)
         # Go along the highest grasps first and convert to Fetch using the saved transform
         sorted_graps_fetch = [gen_grasps[i] @ self._transform_grasp for i in sort_index]
-
         parray = PoseArray()
         parray.header.frame_id = frame_id
         parray.header.stamp = frame_stamp #rospy.Time.now()
@@ -500,6 +514,7 @@ if __name__ == "__main__":
     
     while not rospy.is_shutdown():
         try:
+            _tmp = input("Proceed with Grasp Sampling??")
             listener.run_network()
         except KeyboardInterrupt:
             break
