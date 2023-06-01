@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import pickle
 import numpy as np
 import argparse
 import grasp_estimator
@@ -11,6 +12,35 @@ from utils.visualization_utils import *
 import mayavi.mlab as mlab
 from utils import utils
 from data import DataLoader
+
+from transforms3d.quaternions import mat2quat, quat2mat
+
+def ros_qt_to_rt(rot, trans):
+    qt = np.zeros((4,), dtype=np.float32)
+    qt[0] = rot[3]
+    qt[1] = rot[0]
+    qt[2] = rot[1]
+    qt[3] = rot[2]
+    obj_T = np.eye(4)
+    obj_T[:3, :3] = quat2mat(qt)
+    obj_T[:3, 3] = trans
+    return obj_T
+
+def rt_to_ros_qt(rt):
+    quat = mat2quat(rt[:3, :3])
+    quat = [quat[1], quat[2], quat[3], quat[0]]
+    trans = rt[:3, 3]
+
+    return quat, trans
+
+def inv_rt(RT):
+    """
+    returns the inverse of a 4x4 transform
+    """
+    inv_rt = np.eye(4)
+    inv_rt[:3, :3] = RT[:3, :3].T
+    inv_rt[:3,  3] = RT[:3, :3].T @ RT[:3, 3]
+    return inv_rt
 
 
 def make_parser():
@@ -150,17 +180,14 @@ def main(args):
         for npy_file in glob.glob(os.path.join(args.npy_folder, '*.npy')):
             # Depending on your numpy version you may need to change allow_pickle
             # from True to False.
-
             data = np.load(npy_file, allow_pickle=True,
                            encoding="latin1").item()
-
             depth = data['depth']
             image = data['image']
             K = data['intrinsics_matrix']
             # Removing points that are farther than 1 meter or missing depth
             # values.
-            #depth[depth == 0 or depth > 1] = np.nan
-
+            depth[depth == 0 or depth > 1] = np.nan
             np.nan_to_num(depth, copy=False)
             mask = np.where(np.logical_or(depth == 0, depth > 1))
             depth[mask] = np.nan
@@ -171,18 +198,41 @@ def main(args):
             pc_colors = image.copy()
             pc_colors = np.reshape(pc_colors, [-1, 3])
             pc_colors = pc_colors[selection, :]
-
             # Smoothed pc comes from averaging the depth for 10 frames and removing
             # the pixels with jittery depth between those 10 frames.
             object_pc = data['smoothed_object_pc']
+
             generated_grasps, generated_scores = estimator.generate_and_refine_grasps(
                 object_pc)
+
             mlab.figure(bgcolor=(1, 1, 1))
             draw_scene(
                 pc,
                 pc_color=pc_colors,
-                grasps=generated_grasps,
+                grasps=tf_grasps,
                 grasp_scores=generated_scores,
+                show_gripper_mesh=True,
+                gripper='panda'
+            )
+            print('close the window to show Fetch gripper grasps . . .')
+            mlab.show()
+
+            # NOTE: Steps to align Fetch gripper with Panda Grasp: Rotate along Y by -90, then translate along Z by -0.08
+            # See https://github.com/IRVLUTD/grasp-encoding-dataset/blob/515089b41821902e95546b29cd77324ffb929cc5/rendering-test/test_grasp_viz-alignment_palmpos.ipynb
+            quat_xyzw = [ 0, -0.7071068, 0, 0.7071068 ]
+            correct = [0, 0, -0.08]
+            RT = ros_qt_to_rt(quat_xyzw, correct)
+            print("Transform:\n", RT)
+            tf_grasps = [g @ RT for g in generated_grasps]
+
+            mlab.figure(bgcolor=(1, 1, 1))
+            draw_scene(
+                pc,
+                pc_color=pc_colors,
+                grasps=tf_grasps,
+                grasp_scores=generated_scores,
+                show_gripper_mesh=True,
+                gripper='fetch'
             )
             print('close the window to continue to next object . . .')
             mlab.show()
