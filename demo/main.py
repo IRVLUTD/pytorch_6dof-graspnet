@@ -187,8 +187,6 @@ def main(args):
             K = data['intrinsics_matrix']
             # Removing points that are farther than 1 meter or missing depth
             # values.
-            depth[depth == 0 or depth > 1] = np.nan
-            np.nan_to_num(depth, copy=False)
             mask = np.where(np.logical_or(depth == 0, depth > 1))
             depth[mask] = np.nan
             pc, selection = backproject(depth,
