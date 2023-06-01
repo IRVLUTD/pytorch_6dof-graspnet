@@ -180,26 +180,40 @@ def main(args):
         for npy_file in glob.glob(os.path.join(args.npy_folder, '*.npy')):
             # Depending on your numpy version you may need to change allow_pickle
             # from True to False.
-            data = np.load(npy_file, allow_pickle=True,
-                           encoding="latin1").item()
-            depth = data['depth']
-            image = data['image']
-            K = data['intrinsics_matrix']
-            # Removing points that are farther than 1 meter or missing depth
-            # values.
-            mask = np.where(np.logical_or(depth == 0, depth > 1))
-            depth[mask] = np.nan
-            pc, selection = backproject(depth,
-                                        K,
-                                        return_finite_depth=True,
-                                        return_selection=True)
-            pc_colors = image.copy()
-            pc_colors = np.reshape(pc_colors, [-1, 3])
-            pc_colors = pc_colors[selection, :]
-            # Smoothed pc comes from averaging the depth for 10 frames and removing
-            # the pixels with jittery depth between those 10 frames.
-            object_pc = data['smoothed_object_pc']
 
+            npy_file = "demo/data/real_world.npy"
+            print(f"npyfile", {npy_file})
+            pc_colors = None
+            object_pc = np.load(npy_file)            
+            
+            SCALING_FACTOR = 0.75
+            org_pc = object_pc.copy()
+            center = np.mean(object_pc, axis=0)
+            object_pc -= center
+            object_pc *= SCALING_FACTOR
+            object_pc += center
+            pc = object_pc
+
+            # data = np.load(npy_file, allow_pickle=True,
+            #                encoding="latin1").item()
+            # depth = data['depth']
+            # image = data['image']
+            # K = data['intrinsics_matrix']
+            # # Removing points that are farther than 1 meter or missing depth
+            # # values.
+            # mask = np.where(np.logical_or(depth == 0, depth > 1))
+            # depth[mask] = np.nan
+            # pc, selection = backproject(depth,
+            #                             K,
+            #                             return_finite_depth=True,
+            #                             return_selection=True)
+            # pc_colors = image.copy()
+            # pc_colors = np.reshape(pc_colors, [-1, 3])
+            # pc_colors = pc_colors[selection, :]
+            # # Smoothed pc comes from averaging the depth for 10 frames and removing
+            # # the pixels with jittery depth between those 10 frames.
+            # object_pc = data['smoothed_object_pc']
+            
             generated_grasps, generated_scores = estimator.generate_and_refine_grasps(
                 object_pc)
 
@@ -213,26 +227,37 @@ def main(args):
                 gripper='panda'
             )
             print('close the window to show Fetch gripper grasps . . .')
-            mlab.show()
+            # mlab.show()
 
             # NOTE: Steps to align Fetch gripper with Panda Grasp: Rotate along Y by -90, then translate along Z by -0.08
             # See https://github.com/IRVLUTD/grasp-encoding-dataset/blob/515089b41821902e95546b29cd77324ffb929cc5/rendering-test/test_grasp_viz-alignment_palmpos.ipynb
             quat_xyzw = [ 0, -0.7071068, 0, 0.7071068 ]
-            correct = [0, 0, -0.08]
+            correct = [0, 0, -0.05]
             RT = ros_qt_to_rt(quat_xyzw, correct)
             print("Transform:\n", RT)
-            tf_grasps = [g @ RT for g in generated_grasps]
+
+            # Invert the scaling here
+            # sm_center = np.mean(object_pc, axis=0)
+            sm_center = center
+            g1 = generated_grasps.copy()
+            for g in g1:
+                g[:3, 3] = sm_center + (g[:3, 3] - sm_center) * (1.0/SCALING_FACTOR)                        
+            tf_grasps1 = [g @ RT for g in g1]
+
+            pc -= center
+            pc *= 1.0/SCALING_FACTOR
+            pc += center
+            print(np.allclose(pc, org_pc))
 
             mlab.figure(bgcolor=(1, 1, 1))
             draw_scene(
                 pc,
                 pc_color=pc_colors,
-                grasps=tf_grasps,
+                grasps=tf_grasps1,
                 grasp_scores=generated_scores,
                 show_gripper_mesh=True,
                 gripper='fetch'
             )
-            print('close the window to continue to next object . . .')
             mlab.show()
 
 
