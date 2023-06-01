@@ -207,7 +207,7 @@ def main(args):
             draw_scene(
                 pc,
                 pc_color=pc_colors,
-                grasps=tf_grasps,
+                grasps=generated_grasps,
                 grasp_scores=generated_scores,
                 show_gripper_mesh=True,
                 gripper='panda'
