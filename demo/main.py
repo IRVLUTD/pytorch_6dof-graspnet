@@ -186,7 +186,7 @@ def main(args):
             pc_colors = None
             object_pc = np.load(npy_file)            
             
-            SCALING_FACTOR = 0.75
+            SCALING_FACTOR = 1.0
             org_pc = object_pc.copy()
             center = np.mean(object_pc, axis=0)
             object_pc -= center
@@ -231,12 +231,18 @@ def main(args):
 
             # NOTE: Steps to align Fetch gripper with Panda Grasp: Rotate along Y by -90, then translate along Z by -0.08
             # See https://github.com/IRVLUTD/grasp-encoding-dataset/blob/515089b41821902e95546b29cd77324ffb929cc5/rendering-test/test_grasp_viz-alignment_palmpos.ipynb
-            quat_xyzw = [ 0, -0.7071068, 0, 0.7071068 ]
-            correct = [0, 0, -0.05]
+            
+            ### Alignment for Fetch gripper model from grasp-encoding repo
+            # quat_xyzw = [ 0, -0.7071068, 0, 0.7071068 ]
+            # correct = [0, 0, 0.08]
+            
+            # # Alignment For REAL WORLD FETCH GRIPPER URDF and MESH 
+            quat_xyzw = [ 0.5, -0.5, 0.5, 0.5 ]
+            correct = [0, 0, 0.08]
+
             RT = ros_qt_to_rt(quat_xyzw, correct)
             print("Transform:\n", RT)
-
-            # Invert the scaling here
+            # Invert the scaling here --> THEN ALIGN afterwards
             # sm_center = np.mean(object_pc, axis=0)
             sm_center = center
             g1 = generated_grasps.copy()
@@ -256,7 +262,7 @@ def main(args):
                 grasps=tf_grasps1,
                 grasp_scores=generated_scores,
                 show_gripper_mesh=True,
-                gripper='fetch'
+                gripper='fetch_real_world'
             )
             mlab.show()
 
