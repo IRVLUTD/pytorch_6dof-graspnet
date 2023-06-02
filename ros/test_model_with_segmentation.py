@@ -151,156 +151,6 @@ def extract_points(depth_cv, xyz_image, label, camera_pose):
     return points_base, points_cent
 
 
-# class to receive rgb, depth, label image and publish grasp pose array for it
-class ImgToGraspPubSub:
-
-    def __init__(self, grasp_estimator):
-
-        self.estimator = grasp_estimator
-        self.cv_bridge = CvBridge()
-
-        self.im = None
-        self.depth = None
-        self.depth_frame_id = None
-        self.rgb_frame_id = None
-        self.rgb_frame_stamp = None
-        self.xyz_image = None
-        self.label = None
-
-        self.counter = 0
-        self.output_dir = 'output/real_world'
-
-        # initialize a node
-        rospy.init_node("pose_graspnet")
-        self.pose_pub = rospy.Publisher('pose_6dof', PoseArray, queue_size=10)
-
-        self.base_frame = 'base_link'
-        rgb_sub = message_filters.Subscriber('/selected_rgb', Image, queue_size=10)
-        depth_sub = message_filters.Subscriber('/selected_depth', Image, queue_size=10)
-        label_sub = message_filters.Subscriber('/selected_label', Image, queue_size=10)
-        msg = rospy.wait_for_message('/head_camera/rgb/camera_info', CameraInfo)
-        self.camera_frame = 'head_camera_rgb_optical_frame'
-        self.target_frame = self.base_frame
-
-        self.tf_buffer = tf2_ros.Buffer(rospy.Duration(100.0))  # tf buffer length    
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
-
-        # update camera intrinsics
-        intrinsics = np.array(msg.K).reshape(3, 3)
-        self.fx = intrinsics[0, 0]
-        self.fy = intrinsics[1, 1]
-        self.px = intrinsics[0, 2]
-        self.py = intrinsics[1, 2]
-        print("Camera Intrinsics:", intrinsics)
-
-        # camera pose in base
-        transform = self.tf_buffer.lookup_transform(self.base_frame,
-                                           # source frame:
-                                           self.camera_frame,
-                                           # get the tf at the time the pose was valid
-                                           rospy.Time.now(),
-                                           # wait for at most 1 second for transform, otherwise throw
-                                           rospy.Duration(1.0)).transform
-        quat = [transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w]
-        RT = quaternion_matrix(quat)
-        RT[0, 3] = transform.translation.x
-        RT[1, 3] = transform.translation.y        
-        RT[2, 3] = transform.translation.z
-        self.camera_pose = RT
-        # print(self.camera_pose)
-
-        queue_size = 1
-        slop_seconds = 0.1
-        ts = message_filters.ApproximateTimeSynchronizer([rgb_sub, depth_sub, label_sub], queue_size, slop_seconds)
-        ts.registerCallback(self.callback_rgbd)
-
-
-    def callback_rgbd(self, rgb, depth, label):
-
-        if depth.encoding == '32FC1':
-            depth_cv = self.cv_bridge.imgmsg_to_cv2(depth)
-        elif depth.encoding == '16UC1':
-            depth_cv = self.cv_bridge.imgmsg_to_cv2(depth).copy().astype(np.float32)
-            depth_cv /= 1000.0
-        else:
-            rospy.logerr_throttle(
-                1, 'Unsupported depth type. Expected 16UC1 or 32FC1, got {}'.format(
-                    depth.encoding))
-            return
-
-        im = self.cv_bridge.imgmsg_to_cv2(rgb, 'bgr8')
-        label = self.cv_bridge.imgmsg_to_cv2(label)
-        # compute xyz image
-        height = depth_cv.shape[0]
-        width = depth_cv.shape[1]
-        xyz_image = compute_xyz(depth_cv, self.fx, self.fy, self.px, self.py, height, width)
-
-        # kernel = np.ones((3, 3), np.uint8)
-        # mask_ids = np.unique(label)
-        # assert len(mask_ids) == 1
-        # mask_id = mask_ids[0]
-
-        # mask = np.array(label == mask_id).astype(np.uint8)
-        # mask2 = cv2.erode(mask, kernel)
-        # mask = (mask2 > 0) & (depth_cv > 0)
-        # points = xyz_image[mask, :]
-
-        # # convert points to robot base
-        # points_base = np.matmul(self.camera_pose[:3, :3], points.T) + self.camera_pose[:3, 3].reshape((3, 1))
-        # points_base = points_base.T
-        # selection = np.isfinite(points_base[:, 0])
-        # points_base = points_base[selection, :]
-        # points_cent = np.mean(points_base, axis=0)
-        points_base, points_cent = extract_points(depth_cv, xyz_image, label, 
-                                                  self.camera_pose)
-
-        with lock:
-            self.im = im.copy()
-            self.label = label.copy()
-            self.depth = depth_cv.copy()
-            self.depth_frame_id = depth.header.frame_id
-            self.rgb_frame_id = rgb.header.frame_id
-            self.rgb_frame_stamp = rgb.header.stamp
-            self.xyz_image = xyz_image
-            self.points_base = points_base.copy()
-            self.points_cent = points_cent.copy()
-
-
-    def run_network(self):
-
-        with lock:
-            if listener.im is None:
-              return
-            im_color = self.im.copy()
-            depth_img = self.depth.copy()
-            xyz_image = self.xyz_image.copy()
-            points_base = self.points_base.copy()
-            points_cent = self.points_cent.copy()
-            label = self.label.copy()
-            rgb_frame_id = self.rgb_frame_id
-            depth_frame_id = self.depth_frame_id
-            rgb_frame_stamp = self.rgb_frame_stamp
-
-        print('===================================================')
-        # run the network
-        gen_grasps, gen_scores = self.estimator.generate_and_refine_grasps(
-            points_base)
-
-        prob_index = np.argsort(gen_scores)
-        sorted_graps = gen_grasps[prob_index, :] # list of [rt_grasps]
-
-        parray = PoseArray()
-        parray.header.frame_id = "/base_link"
-        parray.header.stamp = rgb_frame_stamp #rospy.Time.now()
-        for grasp in sorted_graps:
-            quat, trans = rt_to_ros_qt(grasp)
-            p = Pose()
-            set_ros_pose(p, quat, trans)
-            parray.poses.append(p)
-        
-        self.pose_pub.publish(parray)
-
-
 # class to receive pointcloud and publish grasp pose array for it
 class PointToGraspPubSub:
 
@@ -311,8 +161,9 @@ class PointToGraspPubSub:
         self.frame_stamp = None
         self.frame_id = None
         self.base_frame = 'base_link'
-        self.SCALING_FACTOR = 0.8
-
+        self.SCALING_FACTOR = 1.0
+        self.prev_step = None
+        self.step = 0 # indicator for whether a new pc is registered
         # Create the transform the aligns Fetch with Panda Grasp
         # Apply the generated grasp pose on this transform to get pose for Fetch Gripper
         # i.e pose_fetch = pose_panda @ transform
@@ -342,25 +193,31 @@ class PointToGraspPubSub:
         for i, objpt in enumerate(points_pc.points):
             points_base[i, :] = [objpt.x, objpt.y, objpt.z]
         points_cent = np.mean(points_base, axis=0)
-        with lock:
-            self.points_base = points_base.copy()
-            self.points_cent = points_cent.copy()
-            self.frame_id = pc_frame_id
-            self.frame_stamp = pc_frame_stamp
-
+        # with lock:
+        self.points_base = points_base.copy()
+        self.points_cent = points_cent.copy()
+        self.frame_id = pc_frame_id
+        self.frame_stamp = pc_frame_stamp
+        self.step += 1
 
     def run_network(self):
-        with lock:
-            if listener.points_base is None:
-              return
-            points_base = self.points_base.copy()
-            points_cent = self.points_cent.copy()
-            frame_id = self.frame_id
-            frame_stamp = self.frame_stamp
+        # with lock:
+        if listener.points_base is None:
+            return
+        
+        if self.prev_step == self.step:
+            return
+        self.prev_step = self.step
+
+        points_base = self.points_base.copy()
+        points_cent = self.points_cent.copy()
+        frame_id = self.frame_id
+        frame_stamp = self.frame_stamp
         print('===================================================')
         # run the network
 
         # Scale the points using scaling factor before passing through the network
+        points_viz = points_base.copy() # no scaling applied to these
         center = np.mean(points_base, axis=0)
         points_base -= center
         points_base *= self.SCALING_FACTOR
@@ -372,7 +229,7 @@ class PointToGraspPubSub:
 
         mlab.figure(bgcolor=(1, 1, 1))
         draw_scene(
-            points_base,
+            pc_to_network,
             grasps=gen_grasps,
             grasp_scores=gen_scores,
             show_gripper_mesh=True,
@@ -381,15 +238,17 @@ class PointToGraspPubSub:
 
         # Invert the scaling for the translation part of grasp pose
         # Rotation is not afffected
+        gg = []
         for g in gen_grasps:
             g[:3, 3] -= center 
             g[:3, 3] * (1.0/self.SCALING_FACTOR)
             g[:3, 3] += center
+            gg.append(g)
 
         # arg sort the grasps using scores with highest score first
         sort_index = sorted(range(len(gen_scores)), key=lambda i: gen_scores[i], reverse=True)
         # Go along the highest grasps first and convert to Fetch using the saved transform
-        sorted_graps_fetch = [gen_grasps[i] @ self._transform_grasp for i in sort_index]
+        sorted_graps_fetch = [gg[i] @ self._transform_grasp for i in sort_index]
         parray = PoseArray()
         parray.header.frame_id = frame_id
         parray.header.stamp = frame_stamp #rospy.Time.now()
@@ -399,23 +258,9 @@ class PointToGraspPubSub:
             set_ros_pose(p, quat, trans)
             parray.poses.append(p)
         
-        # mlab.figure(bgcolor=(1, 1, 1))
-        # draw_scene(
-        #     points_base,
-        #     grasps=sorted_graps,
-        #     grasp_scores=gen_scores,
-        # )
-        # print('close the window to continue to next object . . .')
-        # mlab.show()
-        
-        pc_to_network -= center
-        pc_to_network *= 1.0/self.SCALING_FACTOR
-        pc_to_network += center
-        # print(np.allclose(pc, org_pc))
-
         mlab.figure(bgcolor=(1, 1, 1))
         draw_scene(
-            pc_to_network,
+            points_viz,
             pc_color=None,
             grasps=sorted_graps_fetch,
             grasp_scores=[gen_scores[i] for i in sort_index],
@@ -431,50 +276,6 @@ class PointToGraspPubSub:
                 break
         
         mlab.show() # show after publishing
-
-# sample class to test grasps poseArray publishing
-class GraspPublisher:
-
-    def __init__(self, grasp_estimator):
-        self.estimator = grasp_estimator
-        self.frame_id = 'base_link'
-        # Create the transform the aligns Fetch with Panda Grasp
-        # Apply the generated grasp pose on this transform to get pose for Fetch Gripper
-        # i.e pose_fetch = pose_panda @ transform
-        _quat_tf = [0, -0.7071068, 0, 0.7071068]
-        _tran_tf = [0, 0, -0.08]
-        self._transform_grasp = ros_qt_to_rt(_quat_tf, _tran_tf)
-        # initialize a node
-        rospy.init_node("pose_graspnet")
-        self.pose_pub = rospy.Publisher('pose_6dof', PoseArray, queue_size=10)
-
-    def run_network(self, object_pts):
-        print('===================================================')
-        # run the network
-        gen_grasps, gen_scores = self.estimator.generate_and_refine_grasps(
-            object_pts)
-        # arg sort the grasps using scores with highest score first
-        prob_index = sorted(range(len(gen_scores)), key=lambda i: gen_scores[i], reverse=True)
-         # Go along the highest grasps first and convert to Fetch using the saved transform
-        sorted_graps = [gen_grasps[i] @ self._transform_grasp for i in prob_index]
-
-        parray = PoseArray()
-        parray.header.frame_id = self.frame_id
-        parray.header.stamp = rospy.Time.now()
-        for grasp in sorted_graps:
-            quat, trans = rt_to_ros_qt(grasp)
-            p = Pose()
-            set_ros_pose(p, quat, trans)
-            parray.poses.append(p)
-        
-        while True:
-            if self.pose_pub.get_num_connections() > 0:
-                rospy.loginfo("Publishing Grasp Pose Array")
-                self.pose_pub.publish(parray)
-                rospy.loginfo("Published pose array")
-                break
-
-
 
 def make_parser():
     parser = argparse.ArgumentParser(
@@ -543,7 +344,6 @@ if __name__ == "__main__":
     
     while not rospy.is_shutdown():
         try:
-            _tmp = input("Proceed with Grasp Sampling??")
             listener.run_network()
         except KeyboardInterrupt:
             break
