@@ -316,8 +316,10 @@ class PointToGraspPubSub:
         # Create the transform the aligns Fetch with Panda Grasp
         # Apply the generated grasp pose on this transform to get pose for Fetch Gripper
         # i.e pose_fetch = pose_panda @ transform
-        _quat_tf = [0, -0.7071068, 0, 0.7071068]
-        _tran_tf = [0, 0, -0.08]
+        # _quat_tf = [0, -0.7071068, 0, 0.7071068]
+        # _tran_tf = [0, 0, -0.08]
+        _quat_tf = [ 0.5, -0.5, 0.5, 0.5 ]
+        _tran_tf = [0, 0, 0.08]
         self._transform_grasp = ros_qt_to_rt(_quat_tf, _tran_tf)
 
         # initialize a node
@@ -363,9 +365,20 @@ class PointToGraspPubSub:
         points_base -= center
         points_base *= self.SCALING_FACTOR
         points_base += center
+        pc_to_network = points_base.copy()
+
         gen_grasps, gen_scores = self.estimator.generate_and_refine_grasps(
             points_base)
-        
+
+        mlab.figure(bgcolor=(1, 1, 1))
+        draw_scene(
+            points_base,
+            grasps=gen_grasps,
+            grasp_scores=gen_scores,
+            show_gripper_mesh=True,
+            gripper='panda'
+        )
+
         # Invert the scaling for the translation part of grasp pose
         # Rotation is not afffected
         for g in gen_grasps:
@@ -394,6 +407,21 @@ class PointToGraspPubSub:
         # )
         # print('close the window to continue to next object . . .')
         # mlab.show()
+        
+        pc_to_network -= center
+        pc_to_network *= 1.0/self.SCALING_FACTOR
+        pc_to_network += center
+        # print(np.allclose(pc, org_pc))
+
+        mlab.figure(bgcolor=(1, 1, 1))
+        draw_scene(
+            pc_to_network,
+            pc_color=None,
+            grasps=sorted_graps_fetch,
+            grasp_scores=[gen_scores[i] for i in sort_index],
+            show_gripper_mesh=True,
+            gripper='fetch_real_world'
+        )
 
         while True:
             if self.pose_pub.get_num_connections() > 0:
@@ -401,7 +429,8 @@ class PointToGraspPubSub:
                 self.pose_pub.publish(parray)
                 rospy.loginfo("Finished publishing pose array")
                 break
-
+        
+        mlab.show() # show after publishing
 
 # sample class to test grasps poseArray publishing
 class GraspPublisher:
