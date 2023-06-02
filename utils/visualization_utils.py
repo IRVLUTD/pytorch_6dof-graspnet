@@ -198,6 +198,9 @@ def draw_scene(pc,
             if gripper == 'fetch':
                 gripper_mesh = sample.Object(
                     'gripper_models/fetch_gripper.obj').mesh
+            elif gripper == 'fetch_real_world':
+                gripper_mesh = sample.Object(
+                    'gripper_models/fetch_real_world.stl').mesh
             else:
                 gripper_mesh = sample.Object(
                     'gripper_models/panda_gripper.obj').mesh
