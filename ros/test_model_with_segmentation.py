@@ -161,7 +161,7 @@ class PointToGraspPubSub:
         self.frame_stamp = None
         self.frame_id = None
         self.base_frame = 'base_link'
-        self.SCALING_FACTOR = 1.0
+        self.SCALING_FACTOR = 0.8
         self.prev_step = None
         self.step = 0 # indicator for whether a new pc is registered
         # Create the transform the aligns Fetch with Panda Grasp
@@ -170,7 +170,7 @@ class PointToGraspPubSub:
         # _quat_tf = [0, -0.7071068, 0, 0.7071068]
         # _tran_tf = [0, 0, -0.08]
         _quat_tf = [ 0.5, -0.5, 0.5, 0.5 ]
-        _tran_tf = [0, 0, 0.08]
+        _tran_tf = [0, 0, -0.1]
         self._transform_grasp = ros_qt_to_rt(_quat_tf, _tran_tf)
 
         # initialize a node
@@ -200,7 +200,7 @@ class PointToGraspPubSub:
         self.frame_stamp = pc_frame_stamp
         self.step += 1
 
-    def run_network(self):
+    def run_network(self, viz=False):
         # with lock:
         if listener.points_base is None:
             return
@@ -227,15 +227,6 @@ class PointToGraspPubSub:
         gen_grasps, gen_scores = self.estimator.generate_and_refine_grasps(
             points_base)
 
-        mlab.figure(bgcolor=(1, 1, 1))
-        draw_scene(
-            pc_to_network,
-            grasps=gen_grasps,
-            grasp_scores=gen_scores,
-            show_gripper_mesh=True,
-            gripper='panda'
-        )
-
         # Invert the scaling for the translation part of grasp pose
         # Rotation is not afffected
         gg = []
@@ -258,24 +249,35 @@ class PointToGraspPubSub:
             set_ros_pose(p, quat, trans)
             parray.poses.append(p)
         
-        mlab.figure(bgcolor=(1, 1, 1))
-        draw_scene(
-            points_viz,
-            pc_color=None,
-            grasps=sorted_graps_fetch,
-            grasp_scores=[gen_scores[i] for i in sort_index],
-            show_gripper_mesh=True,
-            gripper='fetch_real_world'
-        )
-
         while True:
             if self.pose_pub.get_num_connections() > 0:
                 rospy.loginfo(f"Publishing Grasp Pose Array of len {len(parray.poses)}")
                 self.pose_pub.publish(parray)
                 rospy.loginfo("Finished publishing pose array")
                 break
-        
-        mlab.show() # show after publishing
+        if viz:
+            # Panda Gripper
+            mlab.figure(bgcolor=(1, 1, 1))
+            draw_scene(
+                pc_to_network,
+                grasps=gen_grasps,
+                grasp_scores=gen_scores,
+                # show_gripper_mesh=True,
+                # gripper='panda'
+            )
+            # Fetch Gripper 
+            # mlab.figure(bgcolor=(1, 1, 1))
+            # draw_scene(
+            #     points_viz,
+            #     pc_color=None,
+            #     grasps=sorted_graps_fetch,
+            #     grasp_scores=[gen_scores[i] for i in sort_index],
+            #     show_gripper_mesh=True,
+            #     gripper='fetch_real_world'
+            # )
+            mlab.show() # show after publishing
+        print("Returning from run_network")
+
 
 def make_parser():
     parser = argparse.ArgumentParser(
@@ -323,6 +325,8 @@ def make_parser():
         default=30,
         help="Set the batch size of the number of grasps we want to process and can fit into the GPU memory at each forward pass. The batch_size can be increased for a GPU with more memory.",
     )
+
+    parser.add_argument("--viz", action="store_true", help="flag for vizualizing the generated grasps")
     # parser.add_argument("--train_data", action="store_true")
     opts, _ = parser.parse_known_args()
     return parser
@@ -335,7 +339,7 @@ if __name__ == "__main__":
     grasp_sampler_args.is_train = False
     grasp_evaluator_args = utils.read_checkpoint_args(args.grasp_evaluator_folder)
     grasp_evaluator_args.continue_train = True
-    
+
     estimator = grasp_estimator.GraspEstimator(
         grasp_sampler_args, grasp_evaluator_args, args
     )
@@ -344,7 +348,7 @@ if __name__ == "__main__":
     
     while not rospy.is_shutdown():
         try:
-            listener.run_network()
+            listener.run_network(viz=args.viz)
         except KeyboardInterrupt:
             break
 
